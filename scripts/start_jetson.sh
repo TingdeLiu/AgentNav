@@ -10,14 +10,14 @@ source /opt/ros/humble/setup.bash
 conda activate navdp
 
 if [ -n "$S1_CHECKPOINT" ]; then
-    python -m lingnav.robot.ros_client \
+    python -m agentnav.robot.ros_client \
         --instruction "$INSTRUCTION" \
         --s2_host "$S2_HOST" \
         --local_s1 \
         --s1_checkpoint "$S1_CHECKPOINT" \
         --s1_half
 else
-    python -m lingnav.robot.ros_client \
+    python -m agentnav.robot.ros_client \
         --instruction "$INSTRUCTION" \
         --s2_host "$S2_HOST"
 fi
