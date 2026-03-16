@@ -3,243 +3,200 @@
 <p>
   <img src="https://img.shields.io/badge/status-active_development-green" alt="status">
   <img src="https://img.shields.io/badge/open-source-blue" alt="open source">
-  <img src="https://img.shields.io/badge/focus-visual_language_navigation-black" alt="focus">
   <img src="https://img.shields.io/badge/platform-ROS2_%7C_Jetson-orange" alt="platform">
+  <img src="https://img.shields.io/badge/agent-MCP_compatible-black" alt="MCP">
 </p>
 
-**AgentNav** is an open-source framework for language-driven robot navigation. It connects natural language instructions to real robot movement through a dual-system architecture: **S2** handles language-grounded scene understanding via a vision-language model, and **S1** executes low-level navigation — either via the **NavDP** neural policy or a **traditional Nav2/MPPI** planner.
+**AgentNav** is an open-source framework for agentic robot navigation — let an AI agent drive your robot with natural language.
+
+Instead of issuing a single `navigate("go to chair")` call and hoping for the best, AgentNav exposes navigation as a set of independent tools that an AI agent (via MCP) can reason over: *look*, *navigate*, *scan*, *stop*, *status*. The agent decides when to perceive, when to move, when to retry, and when to give up — just like a human operator would.
+
+```
+User: "去黑色椅子"
+
+Agent: robot_look(focus="black chair")
+       → "I see a black chair at 2 o'clock, ~2m away"
+
+       robot_navigate("Go to the black chair") → task_id=a1b2
+
+       task_status("a1b2") → {phase: "moving", distance: 0.8m}
+       task_status("a1b2") → {phase: "arrived"}
+
+       robot_look() → "I'm standing next to the black chair" ✓
+```
 
 ---
 
-## ✨ What We Want To Build
+## Why Agentic Navigation
 
-Imagine pointing a robot at a room and saying "go to the black chair by the window" — and having it navigate there, understanding both the language and the scene.
+Traditional navigation stacks are black boxes: one call in, success/failure out. The agent has no visibility into what's happening and no ability to intervene.
 
-In the short term, we want to establish a practical navigation paradigm: different robots, environments, and instructions should all plug into a unified semantic interface, with the physical navigation handled by swappable low-level policies. The system should work on real hardware at the edge with minimal infrastructure.
+AgentNav flips this. Navigation becomes a conversation between the agent and the robot:
 
-In the long term, we want AgentNav to go beyond point-to-point navigation. It should support multi-step instruction following, active scene exploration, and closed-loop recovery when navigation fails. The goal is a navigation stack that reasons about where to go and *why*, not just how to get there.
-
-This paradigm connects:
-
-`Language Instruction → Scene Understanding (S2) → Navigation Policy (S1) → Robot Motion`
-
-The two systems are designed to be independently upgradeable:
-
-- **S2 (Scene Understanding)**: vision-language model that interprets instructions against the camera view and outputs a target pose. Supports local Qwen3-VL or cloud Gemini API.
-- **S1 (Navigation Execution)**: executes the target pose. Supports NavDP (neural diffusion policy) or Nav2/MPPI (traditional planner).
+| Traditional | AgentNav |
+|-------------|----------|
+| `navigate(target)` → success/fail | Agent perceives → decides → monitors → recovers |
+| Agent blind to progress | Agent polls phase, distance, S2 interpretation |
+| Failure = retry blindly | Failure = agent re-reads scene, replans |
+| Target must be predefined | Natural language + live camera |
 
 ---
 
-## 🌱 Current Status
+## Architecture
 
-AgentNav is under active development and has been validated on real hardware.
-
-Right now, we are mainly working on:
-
-- end-to-end language-to-navigation on Wheeltec robots with Jetson edge deployment
-- comparing neural (NavDP) and traditional (Nav2/MPPI) S1 backends on real indoor scenes
-- extending S2 to support multi-step instruction decomposition
-
-The navigation pipeline is functional. We are continuing to improve robustness, expand hardware support, and document the system as we go.
-
----
-
-## 🏗️ System Architecture
+```
+┌─────────────────────────────────────┐
+│  AI Agent (LLM + nanobot / any MCP) │
+│  Telegram / Slack / CLI             │
+├─────────────────────────────────────┤
+│  MCP Tool Layer (robothub)          │
+│  robot_look · robot_navigate        │
+│  robot_scan · robot_stop · status   │
+├─────────────────────────────────────┤
+│  Navigation Core (agentnav)         │
+│  S2: Vision-Language Understanding  │  ← Qwen3-VL (local) or Gemini (cloud)
+│  S1: Motion Execution               │  ← NavDP (neural) or Nav2/MPPI (traditional)
+├─────────────────────────────────────┤
+│  Hardware: ROS2 / Jetson            │
+│  RGB-D Camera · /cmd_vel · /odom    │
+└─────────────────────────────────────┘
+```
 
 ```mermaid
 graph TB
-    subgraph S2_Backend["S2 — Scene Understanding (HTTP :8890)"]
-        direction LR
-        QWEN["Qwen3-VL (local GPU)"]
-        GEMINI["Gemini API (cloud)"]
+    subgraph Agent["AI Agent (nanobot)"]
+        LLM["LLM Reasoning\n(Claude / GPT / Qwen)"]
+        CHAN["Channel\n(Telegram / CLI)"]
     end
 
-    subgraph Jetson["Jetson Edge"]
-        direction TB
-        CAM["RGB-D Camera<br/>(Gemini 336L / Astra S)"]
-        ROS["ROS2 Node<br/>ros_client.py"]
-        PIPE["AgentNavPipeline<br/>pipeline.py"]
+    subgraph RoboHub["robothub — MCP Server"]
+        LOOK["robot_look\nrobot_scan\nrobot_capture"]
+        NAV["robot_navigate\nrobot_explore"]
+        CTRL["robot_stop\nrobot_status\ntask_status"]
+    end
 
-        subgraph S1_Options["S1 — Navigation (selectable)"]
-            NAVDP["NavDP Policy<br/>(neural, --s1_mode navdp)"]
-            NAV2["Nav2 / MPPI<br/>(traditional, --s1_mode nav2)"]
-        end
+    subgraph Core["agentnav — Navigation Core"]
+        S2["S2: Scene Understanding\n(Qwen3-VL / Gemini)"]
+        S1A["S1: NavDP\n(neural policy)"]
+        S1B["S1: Nav2 + MPPI\n(traditional)"]
+    end
 
-        CTRL["MPC + PID Controller<br/>(NavDP mode only)"]
+    subgraph HW["Hardware (Jetson + ROS2)"]
+        CAM["RGB-D Camera"]
         ROBOT["Mobile Robot"]
-
-        CAM --> ROS
-        ROS --> PIPE
-        PIPE --> NAVDP --> CTRL -->|"v, ω"| ROBOT
-        PIPE --> NAV2 -->|"NavigateToPose action"| ROBOT
     end
 
-    USER["Language Instruction<br/>'Go to the black chair'"]
-    USER -->|"--instruction or stdin"| ROS
-    PIPE <-->|"HTTP REST (LAN)"| S2_Backend
+    CHAN --> LLM
+    LLM -->|MCP tool calls| LOOK & NAV & CTRL
+    LOOK & NAV --> S2
+    NAV --> S1A & S1B
+    S2 <--> CAM
+    S1A & S1B -->|cmd_vel| ROBOT
 ```
 
-### S1 Navigation Modes
+### S2 — Scene Understanding
 
-| Mode | Flag | Algorithm | Control output |
-|------|------|-----------|----------------|
-| NavDP (default) | `--s1_mode navdp` | Neural diffusion policy | Trajectory → MPC/PID → `/cmd_vel` |
-| Nav2 / MPPI | `--s1_mode nav2` | Nav2 + MPPI sampling controller | Nav2 action → `/cmd_vel` directly |
+| Provider | Hardware | Notes |
+|----------|----------|-------|
+| Qwen3-VL | GPU (≥16GB VRAM) | Local inference, best accuracy |
+| Gemini API | None (cloud) | No GPU needed, internet required |
 
-### Deployment Modes
+### S1 — Navigation Execution
 
-```mermaid
-graph LR
-    subgraph ModeA["Mode A: NavDP local S1 (Recommended)"]
-        J1["Jetson"] -- "local inference" --> N1["NavDP (--local_s1)"]
-        J1 <-- "HTTP :8890" --> G1["GPU Server (S2 Qwen)"]
-    end
+| Mode | Algorithm | When to use |
+|------|-----------|-------------|
+| NavDP (default) | Neural diffusion policy | Unstructured environments, no map needed |
+| Nav2 / MPPI | Traditional planner | Mapped environments, predictable paths |
 
-    subgraph ModeB["Mode B: Gemini S2 + NavDP S1"]
-        J2["Jetson"] <-- "HTTP :8901" --> N2["NavDP Server"]
-        J2 <-- "Gemini API" --> G2["Cloud (S2 Gemini)"]
-    end
+---
 
-    subgraph ModeC["Mode C: Nav2/MPPI S1"]
-        J3["Jetson"] -- "--s1_mode nav2" --> N3["Nav2 + MPPI"]
-        J3 <-- "HTTP :8890" --> G3["GPU / Cloud (S2)"]
-    end
+## MCP Tool Reference
 
-    subgraph ModeD["Mode D: S2-only Testing"]
-        PC["Dev Machine"] -- "--skip_s1" --> G4["S2 Server"]
-    end
+The agent controls the robot through these tools:
+
+| Tool | Description |
+|------|-------------|
+| `robot_look(focus?)` | Describe current scene via S2. Pass a focus target to check visibility. |
+| `robot_scan(angles?)` | Rotate to multiple angles (default 0/90/180/270°), describe each direction. |
+| `robot_capture()` | Return raw camera frame as base64. |
+| `robot_navigate(instruction)` | Natural language → S2 pose → S1 execution. Returns `task_id`. |
+| `robot_explore(hint?)` | Actively search for a target not currently visible. Returns `task_id`. |
+| `robot_stop()` | Emergency stop. Latency < 50ms. |
+| `robot_status()` | Current pose, velocity, battery, nav state. |
+| `task_status(task_id)` | Poll navigate/explore progress: phase, distance, elapsed, S2 interpretation. |
+| `task_cancel(task_id)` | Cancel task and stop robot. |
+
+---
+
+## Agent Navigation Patterns
+
+### A — Target visible, navigate directly
+
+```
+robot_look(focus="black chair") → visible at 2m
+robot_navigate("Go to the black chair") → task_id
+[poll task_status every 5s until arrived]
+robot_look() → confirm arrival
+```
+
+### B — Target not visible, scan then navigate
+
+```
+robot_look() → target not visible
+robot_scan() → "180°: door leading to corridor"
+robot_navigate("Go through the door") → task_id
+[arrived] → robot_look(focus="kitchen") → found
+robot_navigate("Move to kitchen center") → task_id
+```
+
+### C — Navigation failed, agent replans
+
+```
+task_status(id) → {status: "failed", reason: "S2 could not locate target"}
+robot_look() → "chair partially behind table, only leg visible"
+robot_navigate("Go to the chair leg visible behind the table") → task_id
+[arrived] ✓
+```
+
+### D — Emergency stop
+
+```
+User: "停"
+Agent: robot_stop() → "Robot stopped."
 ```
 
 ---
 
-## 📦 Project Structure
+## Project Structure
 
 ```
 AgentNav/
-├── agentnav/
-│   ├── server/
-│   │   ├── s2_server.py               # S2 HTTP server (multi-provider)
-│   │   └── providers/
-│   │       ├── base_provider.py       # Abstract base class + SYSTEM_PROMPT
-│   │       ├── qwen_provider.py       # Local Qwen3-VL inference
-│   │       └── gemini_provider.py     # Google Gemini API
-│   ├── clients/
-│   │   ├── navdp_client.py            # HTTP S1 client (NavDP server)
-│   │   ├── navdp_local_client.py      # Local NavDP inference (Jetson edge)
-│   │   └── nav2_client.py             # Nav2/MPPI S1 client (traditional nav)
-│   ├── core/
-│   │   ├── pipeline.py                # S2+S1 orchestration (AgentNavPipeline)
-│   │   └── navdp_agent.py             # NavDP_Policy wrapper
-│   ├── robot/
-│   │   ├── ros_client.py              # Jetson ROS2 node (planning + control)
-│   │   └── controllers.py             # MPC + PID controllers (CasADi)
-│   └── utils/
-│       └── thread_utils.py            # ReadWriteLock
-├── tests/
-│   └── test_s2_client.py              # S2 standalone test client
-├── scripts/
-│   ├── start_s2_server.sh
-│   └── start_jetson.sh
-├── setup.py
-├── requirements_server.txt            # GPU server / Gemini provider dependencies
-└── requirements_jetson.txt            # Jetson edge dependencies
-```
-
-**NavDP dependency**: `navdp_agent.py` loads `NavDP_Policy` from a `NavDP/` directory that is a sibling of `AgentNav/` (from [InternRobotics/NavDP](https://github.com/InternRobotics/NavDP)).
-If AgentNav is at `~/VLN/AgentNav`, NavDP should be at `~/VLN/NavDP`. Override with: `NAVDP_ROOT=/path/to/NavDP`.
-
----
-
-## 🚀 Installation
-
-### S2 Server
-
-#### Option A — Local Qwen3-VL (GPU required)
-
-Reference: [QwenLM/Qwen3-VL](https://github.com/QwenLM/Qwen3-VL)
-
-```bash
-conda create -n qwen3vl python=3.10
-conda activate qwen3vl
-
-# PyTorch (adjust for your CUDA version)
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
-
-# AgentNav S2 dependencies
-cd /path/to/AgentNav
-pip install -r requirements_server.txt
-
-# Optional: Flash Attention (faster inference)
-pip install flash-attn --no-build-isolation
-
-# Download model weights
-huggingface-cli download Qwen/Qwen3-VL-8B-Instruct --local-dir /path/to/Qwen3-VL-8B-Instruct
-```
-
-#### Option B — Gemini API (no local GPU needed)
-
-```bash
-conda activate qwen3vl  # reuse same env, or any Python env with flask
-
-pip install -r requirements_server.txt
-
-# Install one Gemini SDK (new SDK preferred):
-pip install google-genai            # new SDK (recommended)
-# pip install google-generativeai   # legacy SDK (fallback)
-
-# Get your API key from https://aistudio.google.com/
-export GEMINI_API_KEY=your_key_here
-```
-
-### S1 Edge — NavDP (Jetson)
-
-Reference: [InternRobotics/NavDP](https://github.com/InternRobotics/NavDP)
-
-```bash
-conda create -n navdp python=3.10
-conda activate navdp
-
-# Clone NavDP as a sibling of AgentNav
-cd ~/VLN
-git clone https://github.com/InternRobotics/NavDP
-
-# Jetson-specific PyTorch wheel (aarch64)
-pip install /home/wheeltec/torchvision-0.21.0-cp310-cp310-linux_aarch64.whl
-
-cd ~/VLN/NavDP/baselines/navdp
-pip install -r requirements.txt
-
-cd ~/VLN/AgentNav
-pip install -r requirements_jetson.txt
-
-sudo apt install ros-humble-cv-bridge ros-humble-message-filters
-```
-
-### S1 Edge — Nav2/MPPI (Jetson)
-
-Reference: [wheeltec_robot_mppi](../wheeltec_ros2/src/wheeltec_robot_mppi)
-
-```bash
-# Nav2 stack + required ROS2 packages
-sudo apt install ros-humble-nav2-bringup ros-humble-nav2-msgs \
-                 ros-humble-tf2-geometry-msgs ros-humble-slam-toolbox
-
-# Build wheeltec_robot_mppi in your ROS2 workspace
-cd ~/ros2_ws
-colcon build --packages-select wheeltec_robot_rrt3
-source install/setup.bash
+├── nanobot/                 ← Agent OS (MCP client, Telegram/Slack/CLI channels)
+│   ├── agent/               ← LLM loop, memory, skills, subagents
+│   ├── channels/            ← Telegram, Slack, Discord, WeChat, Email ...
+│   ├── providers/           ← LiteLLM, Azure OpenAI, Codex ...
+│   └── tools/               ← filesystem, shell, web, MCP, cron
+│
+├── robothub/                ← MCP server (runs on Jetson, Python 3.10)
+│   ├── bridge_core/         ← RobotState, TaskManager, MCP server entry
+│   └── drivers/             ← look, navigate, stop, status, task (hot-reloadable)
+│
+└── agentnav/                ← Navigation core (S2 + S1, 0 lines modified)
+    ├── server/              ← S2 HTTP server (Qwen3-VL / Gemini)
+    ├── clients/             ← NavDP client, Nav2 client
+    ├── core/                ← AgentNavPipeline
+    └── robot/               ← ROS2 node, MPC/PID controllers
 ```
 
 ---
 
-## ▶️ Quick Start
+## Quick Start
 
-### 1. Start the S2 server
+### 1. Start S2 server (GPU machine or cloud)
 
 ```bash
+# Local Qwen3-VL
 conda activate qwen3vl
-
-# Local Qwen3-VL (GPU)
 python -m agentnav.server.s2_server \
     --provider qwen \
     --model_path /path/to/Qwen3-VL-8B-Instruct \
@@ -248,215 +205,108 @@ python -m agentnav.server.s2_server \
 # OR: Gemini API (no GPU)
 python -m agentnav.server.s2_server \
     --provider gemini \
-    --gemini_api_key YOUR_KEY \
-    --gemini_model gemini-2.0-flash \
+    --gemini_api_key $GEMINI_API_KEY \
     --port 8890
 ```
 
-### 2. Test S2 connectivity
-
-```bash
-# Random image (connectivity test only)
-python tests/test_s2_client.py --host 127.0.0.1 --port 8890 \
-    --random --instruction "Go to the chair"
-
-# Real image
-python tests/test_s2_client.py --host 127.0.0.1 --port 8890 \
-    --image /path/to/test.jpg --instruction "Go to the door"
-```
-
-### 3. Pipeline test (S2 only, skip S1)
-
-```bash
-python -m agentnav.core.pipeline \
-    --s2_host 127.0.0.1 --s2_port 8890 \
-    --random --skip_s1 \
-    --instruction "Turn left, go to the door"
-```
-
-### 4. Full deployment — NavDP S1 (Jetson + local inference)
-
-> **Prerequisites:** Start the robot base and camera drivers first:
->
-> ```bash
-> # Terminal 1 — robot base (publishes /odom, subscribes /cmd_vel)
-> ros2 launch wheeltec_robot base_node.launch.py
->
-> # Terminal 2 — RGB-D camera
-> ros2 launch orbbec_camera gemini_336l.launch.py
-> ```
+### 2. Start robot agent (Jetson)
 
 ```bash
 conda activate navdp
+export S2_HOST=192.168.1.100
+export ANTHROPIC_API_KEY=...
+export TELEGRAM_BOT_TOKEN=...
 
-# Mode A: single instruction via command line
-python -m agentnav.robot.ros_client \
-    --instruction "Go to the black chair" \
-    --s2_host 192.168.1.100 \
-    --s1_mode navdp \
-    --local_s1 \
-    --s1_checkpoint /home/wheeltec/VLN/checkpoints/navdp-cross-modal.ckpt \
-    --s1_half
-
-# Mode B: interactive mode (enter instructions one by one at the prompt)
-python -m agentnav.robot.ros_client \
-    --s2_host 192.168.1.100 \
-    --s1_mode navdp \
-    --local_s1 \
-    --s1_checkpoint /home/wheeltec/VLN/checkpoints/navdp-cross-modal.ckpt \
-    --s1_half
-# > Go to the black chair
-# > Go to the kitchen table
-# > q
+python -m nanobot --config robothub/config/nanobot.yaml
 ```
 
-### 5. Full deployment — Nav2/MPPI S1 (Jetson + traditional navigation)
+### 3. Talk to your robot
 
-> **Prerequisites:** Start the robot base, camera, and Nav2 stack:
->
-> ```bash
-> # Terminal 1 — robot base + lidar
-> ros2 launch wheeltec_robot base_node.launch.py
->
-> # Terminal 2 — RGB-D camera
-> ros2 launch orbbec_camera gemini_336l.launch.py
->
-> # Terminal 3 — Nav2 + MPPI + SLAM
-> ros2 launch wheeltec_robot_rrt3 slam_nav.launch.py
-> ```
+Send a message on Telegram:
+
+```
+你: 去黑色椅子
+Bot: 🔍 Looking at the scene...
+     I can see a black chair at roughly 2 o'clock, about 2 meters away.
+     Navigating... [task a1b2]
+     Moving (0.9m remaining)...
+     Arrived. ✓
+```
+
+---
+
+## Installation
+
+### S2 Server
 
 ```bash
+conda create -n qwen3vl python=3.10
+conda activate qwen3vl
+pip install -r requirements_server.txt
+
+# Optional: Flash Attention (faster)
+pip install flash-attn --no-build-isolation
+
+# Download Qwen3-VL weights
+huggingface-cli download Qwen/Qwen3-VL-8B-Instruct --local-dir /path/to/weights
+```
+
+### Jetson Edge (NavDP)
+
+```bash
+conda create -n navdp python=3.10
 conda activate navdp
 
-# Mode A: single instruction
-python -m agentnav.robot.ros_client \
-    --instruction "Go to the red chair" \
-    --s2_host 192.168.1.100 \
-    --s1_mode nav2 \
-    --map_frame map \
-    --camera_frame camera_color_optical_frame
+# Clone NavDP as sibling of AgentNav
+git clone https://github.com/InternRobotics/NavDP ../NavDP
+pip install -r requirements_jetson.txt
+pip install -e .
 
-# Mode B: interactive mode
-python -m agentnav.robot.ros_client \
-    --s2_host 192.168.1.100 \
-    --s1_mode nav2 \
-    --map_frame map \
-    --camera_frame camera_color_optical_frame
-# > Go to the red chair
-# > Go to the door
-# > q
+sudo apt install ros-humble-cv-bridge ros-humble-message-filters
 ```
 
-Nav2 handles `/cmd_vel` directly via MPPI — the AgentNav control thread yields during navigation.
+### Jetson Edge (Nav2/MPPI)
 
----
-
-## 📖 Reference
-
-### S2 Providers
-
-| Provider | Flag | Hardware | Notes |
-|----------|------|----------|-------|
-| Qwen3-VL | `--provider qwen` | GPU (VRAM ≥ 16GB) | Default; best accuracy; runs locally |
-| Gemini | `--provider gemini` | None (API) | No GPU needed; requires internet + API key |
-
-**Gemini-specific flags:**
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--gemini_api_key` | `$GEMINI_API_KEY` | Google AI Studio API Key |
-| `--gemini_model` | `gemini-2.0-flash` | Model name (`gemini-2.0-flash`, `gemini-1.5-pro`, …) |
-| `--gemini_temperature` | `0.0` | Generation temperature (0 = deterministic) |
-
-### S1 Navigation Modes
-
-| Flag | Value | Algorithm | When to use |
-|------|-------|-----------|-------------|
-| `--s1_mode` | `navdp` (default) | NavDP neural policy | Unstructured environments, learned behaviors |
-| `--s1_mode` | `nav2` | Nav2 + MPPI | Mapped environments, predictable spaces |
-
-**Nav2 mode — additional flags:**
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--camera_frame` | `camera_color_optical_frame` | Camera TF frame |
-| `--base_frame` | `base_link` | Robot base TF frame |
-| `--map_frame` | `map` | Map TF frame |
-| `--stop_distance` | `0.5` | Stop distance from target (m) |
-
-**Required TF tree** (wheeltec standard):
-```
-map → odom_combined → base_footprint → camera_color_optical_frame
-```
-
-### Camera Intrinsics
-
-| Camera | Resolution | Constant |
-|--------|------------|----------|
-| Gemini 336L (default) | 1280×720 | `GEMINI_336L_INTRINSIC` |
-| Astra S | 640×480 | `ASTRA_S_INTRINSIC` |
-
-Switch camera (S2 server + Jetson must match):
 ```bash
-python -m agentnav.server.s2_server \
-    --image_width 640 --image_height 480 \
-    --resize_w 640 --resize_h 480
+sudo apt install ros-humble-nav2-bringup ros-humble-nav2-msgs \
+                 ros-humble-tf2-geometry-msgs ros-humble-slam-toolbox
 ```
 
 ---
 
-## ❓ FAQ
+## Roadmap
 
-### What is AgentNav?
-
-AgentNav is an open-source framework for language-driven robot navigation. You give it a natural language instruction and a camera feed, and it figures out where to go and drives the robot there. The core focus is navigation — not manipulation, not general embodied AI, but getting a robot from A to B based on what you say and what it sees.
-
-### How does AgentNav differ from running NavDP or Nav2 directly?
-
-NavDP and Nav2 handle the *how* of navigation — trajectory generation and motion planning. AgentNav adds the *what* and *where*: it uses a vision-language model to interpret your instruction against the live camera view and extract a navigation target. Without AgentNav, you need to specify a goal pose manually. With it, you just say "go to the door" and it handles the rest.
-
-### Which S1 backend should I use?
-
-Use **NavDP** for unstructured environments where the robot needs to navigate around furniture, people, and clutter without a pre-built map. Use **Nav2/MPPI** for environments where you have a reliable SLAM map and want predictable, repeatable paths. Both modes accept the same language instructions.
-
-### Can I swap out the vision-language model?
-
-Yes. S2 is a pluggable HTTP server with a provider interface. You can run it with local Qwen3-VL on a GPU server, or with the Gemini API from any machine with internet access. Adding a new provider means implementing `base_provider.py`.
-
----
-
-## 🗺️ Roadmap
-
-- [x] End-to-end language-to-navigation pipeline on real hardware
-- [x] Dual S1 backend: NavDP (neural) and Nav2/MPPI (traditional)
-- [x] Dual S2 backend: Qwen3-VL (local) and Gemini (cloud)
-- [x] Interactive multi-instruction mode
-- [ ] Multi-step instruction decomposition in S2
-- [ ] Active exploration when the target is not visible
-- [ ] Closed-loop failure detection and recovery
-- [ ] Broader robot platform support (beyond Wheeltec)
+- [x] End-to-end language-to-navigation on real hardware
+- [x] NavDP (neural) and Nav2/MPPI (traditional) S1 backends
+- [x] Qwen3-VL (local) and Gemini (cloud) S2 backends
+- [x] MCP tool layer for agentic control (robothub)
+- [x] nanobot agent OS integration (Telegram / CLI)
+- [ ] `robot_scan` multi-angle perception
+- [ ] `robot_explore` active target search
+- [ ] Closed-loop failure recovery (agent replans on task_status failed)
+- [ ] Progress streaming to Telegram during navigation
 - [ ] Simulation environment for development and evaluation
+- [ ] Broader robot platform support
 
 ---
 
-## 🤝 Contributing
+## Acknowledgements
 
-AgentNav is navigation-focused and welcomes contributions in areas that advance that goal:
-
-- new S1 navigation backends (VLN policies, other planners)
-- new S2 vision-language providers
-- ROS2 integration improvements and new robot platform support
-- simulation environments for navigation evaluation
-- benchmarking and evaluation tools
-- documentation and deployment guides
-
-Contributions welcome via Issues, Pull Requests, and Discussions.
-
----
-
-## 🙏 Acknowledgements
-
-- [QwenLM/Qwen3-VL](https://github.com/QwenLM/Qwen3-VL) — S2 local visual language model
+- [QwenLM/Qwen3-VL](https://github.com/QwenLM/Qwen3-VL) — S2 vision-language model
 - [InternRobotics/NavDP](https://github.com/InternRobotics/NavDP) — S1 neural navigation policy
-- [Google Gemini API](https://aistudio.google.com/) — S2 cloud visual language model
-- [Nav2](https://nav2.ros.org/) — S1 traditional navigation stack (MPPI controller)
+- [Google Gemini API](https://aistudio.google.com/) — S2 cloud provider
+- [Nav2](https://nav2.ros.org/) — S1 traditional navigation stack
+
+---
+
+## Contributing
+
+Contributions welcome in:
+
+- New S1 navigation backends (VLN policies, other planners)
+- New S2 vision-language providers
+- ROS2 integration and new robot platforms
+- Simulation environments
+- Benchmarking and evaluation tools
+
+Issues, PRs, and Discussions are open.
