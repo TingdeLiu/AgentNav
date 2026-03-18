@@ -114,6 +114,8 @@ graph TB
 
 The agent controls the robot through these tools:
 
+### Navigation Tools
+
 | Tool | Description |
 |------|-------------|
 | `robot_look(focus?)` | Describe current scene via S2. Pass a focus target to check visibility. |
@@ -125,6 +127,20 @@ The agent controls the robot through these tools:
 | `robot_status()` | Current pose, velocity, battery, nav state. |
 | `task_status(task_id)` | Poll navigate/explore progress: phase, distance, elapsed, S2 interpretation. |
 | `task_cancel(task_id)` | Cancel task and stop robot. |
+
+### ROS2 Introspection Tools
+
+Let the agent discover any robot's capabilities without hardcoded knowledge:
+
+| Tool | Description |
+|------|-------------|
+| `ros_list_nodes()` | List all running ROS2 nodes. Start here with any new robot. |
+| `ros_list_topics(show_types?)` | List active topics. `show_types=True` includes message types. |
+| `ros_topic_info(topic)` | Message type, publisher/subscriber nodes. Warns on motion-control topics. |
+| `ros_topic_echo(topic, timeout_s?)` | Read one message from a topic. Returns `{"error":"timeout"}` if none arrives. |
+| `ros_service_list()` | List all services with types. |
+| `ros_topic_pub(topic, msg_type, data)` | Publish once to a topic. Motion topics always include a safety `warning`. |
+| `ros_service_call(service, srv_type, args?)` | Call a ROS2 service and return the response. |
 
 ---
 
@@ -165,6 +181,27 @@ User: "停"
 Agent: robot_stop() → "Robot stopped."
 ```
 
+### E — First contact with an unknown robot
+
+```
+Agent: ros_list_nodes()
+       → {nodes: ['/base_controller', '/lidar', '/camera_node'], count: 3}
+
+       ros_list_topics(show_types=True)
+       → {topics: [{name: '/cmd_vel', type: 'geometry_msgs/msg/Twist'},
+                   {name: '/odom',    type: 'nav_msgs/msg/Odometry'},
+                   {name: '/scan',    type: 'sensor_msgs/msg/LaserScan'}, ...]}
+
+       ros_topic_echo('/odom', timeout_s=3)
+       → {message: {pose: {pose: {position: {x: 1.2, y: 0.8}}}, ...}}
+
+       ros_topic_info('/cmd_vel')
+       → {publisher_count: 0, subscriber_count: 1,
+          warning: '/cmd_vel is a motion-control topic...'}
+
+       → Agent now knows the robot's interface and can proceed with navigation
+```
+
 ---
 
 ## Project Structure
@@ -192,46 +229,54 @@ AgentNav/
 
 ## Quick Start
 
-### 1. Start S2 server (GPU machine or cloud)
+### 1. Install nanobot (agent OS)
 
 ```bash
-# Local Qwen3-VL
-conda activate qwen3vl
-python -m agentnav.server.s2_server \
-    --provider qwen \
-    --model_path /path/to/Qwen3-VL-8B-Instruct \
-    --port 8890
-
-# OR: Gemini API (no GPU)
-python -m agentnav.server.s2_server \
-    --provider gemini \
-    --gemini_api_key $GEMINI_API_KEY \
-    --port 8890
+pip install nanobot-ai          # Python 3.11+
 ```
 
-### 2. Start robot agent (Jetson)
+### 2. Set environment variables
 
 ```bash
-conda activate navdp
-export S2_HOST=192.168.1.100
-export ANTHROPIC_API_KEY=...
-export TELEGRAM_BOT_TOKEN=...
+export ANTHROPIC_API_KEY=sk-ant-...          # Anthropic API key
+export TELEGRAM_BOT_TOKEN=123456:ABC-...     # from @BotFather
+export MY_TELEGRAM_ID=987654321              # your numeric ID (from @userinfobot)
+export NAVDP_PYTHON=/opt/conda/envs/navdp/bin/python   # Python 3.10 in navdp env
 
-python -m nanobot --config robothub/config/nanobot.yaml
+# Optional (have defaults)
+export S2_HOST=127.0.0.1
+export S2_PORT=8890
+export S1_MODE=navdp
 ```
 
-### 3. Talk to your robot
+### 3. Launch (installs agentnav + writes config + starts gateway)
 
-Send a message on Telegram:
+```bash
+bash agentnav/scripts/start_robot_agent.sh
+```
+
+This script:
+1. Installs `agentnav` into your navdp Python env (editable)
+2. Writes `~/.nanobot/config.json` with your env vars substituted
+3. Runs `nanobot gateway` — nanobot launches the MCP server as a subprocess automatically
+
+### 4. Talk to your robot via Telegram
 
 ```
-你: 去黑色椅子
-Bot: 🔍 Looking at the scene...
-     I can see a black chair at roughly 2 o'clock, about 2 meters away.
-     Navigating... [task a1b2]
-     Moving (0.9m remaining)...
-     Arrived. ✓
+You: 停
+Bot: Robot stopped. Emergency stop flag set.
+
+You: 机器人现在在哪，状态如何
+Bot: {
+       "nav_state": "idle",
+       "pose": {"x": 1.2, "y": 0.8, "theta": 0.3},
+       "battery_pct": 82,
+       "velocity": {"v": 0.0, "w": 0.0}
+     }
 ```
+
+Tools available now: `robot_stop`, `robot_status`, and all 7 `ros_*` introspection tools.
+Phase 2+ tools (after wiring ROS2 subscribers): `robot_look`, `robot_scan`, `s2_locate`, `s1_move`, `task_status`.
 
 ---
 
@@ -279,9 +324,11 @@ sudo apt install ros-humble-nav2-bringup ros-humble-nav2-msgs \
 - [x] End-to-end language-to-navigation on real hardware
 - [x] NavDP (neural) and Nav2/MPPI (traditional) S1 backends
 - [x] Qwen3-VL (local) and Gemini (cloud) S2 backends
-- [x] MCP tool layer for agentic control (robothub)
+- [x] MCP tool layer for agentic control
 - [x] nanobot agent OS integration (Telegram / CLI)
-- [ ] `robot_scan` multi-angle perception
+- [x] ROS2 introspection tools — agent discovers any robot's nodes/topics/services dynamically
+- [ ] `robot_look` / `robot_scan` perception tools (Phase 2)
+- [ ] `s2_locate` + `s1_move` locate-and-move pipeline (Phase 3)
 - [ ] `robot_explore` active target search
 - [ ] Closed-loop failure recovery (agent replans on task_status failed)
 - [ ] Progress streaming to Telegram during navigation

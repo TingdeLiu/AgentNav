@@ -1,0 +1,45 @@
+{
+  "agents": {
+    "defaults": {
+      "model": "anthropic/claude-sonnet-4-6",
+      "provider": "anthropic",
+      "maxToolIterations": 40,
+      "contextWindowTokens": 32768
+    }
+  },
+  "providers": {
+    "anthropic": {
+      "apiKey": "${ANTHROPIC_API_KEY}"
+    }
+  },
+  "channels": {
+    "telegram": {
+      "enabled": true,
+      "token": "${TELEGRAM_BOT_TOKEN}",
+      "allowFrom": ["${MY_TELEGRAM_ID}"]
+    }
+  },
+  "tools": {
+    "mcpServers": {
+      "agentnav": {
+        "command": "${NAVDP_PYTHON}",
+        "args": ["-m", "agentnav.bridge_core.server"],
+        "env": {
+          "S2_HOST": "${S2_HOST}",
+          "S2_PORT": "${S2_PORT}",
+          "S1_MODE": "${S1_MODE}",
+          "S1_CHECKPOINT": "${S1_CHECKPOINT}",
+          "CAMERA_FX": "${CAMERA_FX}",
+          "CAMERA_FY": "${CAMERA_FY}",
+          "CAMERA_CX": "${CAMERA_CX}",
+          "CAMERA_CY": "${CAMERA_CY}"
+        },
+        "toolTimeout": 600
+      }
+    }
+  },
+  "gateway": {
+    "host": "0.0.0.0",
+    "port": 18790
+  }
+}
