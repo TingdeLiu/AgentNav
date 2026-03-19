@@ -194,8 +194,8 @@ class QQConfig(Base):
     """QQ channel configuration using botpy SDK."""
 
     enabled: bool = False
-    app_id: str = ""  # 机器人 ID (AppID) from q.qq.com
-    secret: str = ""  # 机器人密钥 (AppSecret) from q.qq.com
+    app_id: str = ""  # bot ID (AppID) from q.qq.com
+    secret: str = ""  # bot secret (AppSecret) from q.qq.com
     allow_from: list[str] = Field(
         default_factory=list
     )  # Allowed user openids (empty = public access)
@@ -283,8 +283,8 @@ class ProvidersConfig(Base):
     moonshot: ProviderConfig = Field(default_factory=ProviderConfig)
     minimax: ProviderConfig = Field(default_factory=ProviderConfig)
     aihubmix: ProviderConfig = Field(default_factory=ProviderConfig)  # AiHubMix API gateway
-    siliconflow: ProviderConfig = Field(default_factory=ProviderConfig)  # SiliconFlow (硅基流动)
-    volcengine: ProviderConfig = Field(default_factory=ProviderConfig)  # VolcEngine (火山引擎)
+    siliconflow: ProviderConfig = Field(default_factory=ProviderConfig)  # SiliconFlow
+    volcengine: ProviderConfig = Field(default_factory=ProviderConfig)  # VolcEngine
     volcengine_coding_plan: ProviderConfig = Field(default_factory=ProviderConfig)  # VolcEngine Coding Plan
     byteplus: ProviderConfig = Field(default_factory=ProviderConfig)  # BytePlus (VolcEngine international)
     byteplus_coding_plan: ProviderConfig = Field(default_factory=ProviderConfig)  # BytePlus Coding Plan

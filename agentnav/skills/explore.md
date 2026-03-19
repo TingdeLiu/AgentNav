@@ -1,19 +1,19 @@
 # explore skill
 
-当目标不在当前视野时，使用以下步骤主动搜索：
+When the target is not in the current field of view, use the following steps to actively search:
 
-1. `robot_scan()` — 旋转一圈，获取各方向场景描述
-2. 根据 scan 结果判断最可能的方向（如"180°有门，厨房可能在门后"）
-3. `s2_locate("朝那个方向移动")` → pose
-4. `s1_move(pose)` → task_id，用 `task_status` 轮询直到 `phase == "arrived"`
-5. `robot_look(focus=目标)` — 检查目标是否可见
-6. 若可见：执行标准导航（robot_look → s2_locate → s1_move → 轮询 → 验证）
-7. 若不可见且探索次数未超过 3 次：回到步骤 1
-8. 若超过 3 次：告知用户未找到目标，请求更多信息或建议
+1. `robot_scan()` — rotate 360°, get scene descriptions in each direction
+2. Based on scan results, determine the most likely direction (e.g. "there's a door at 180°, kitchen is likely behind it")
+3. `s2_locate("move in that direction")` → pose
+4. `s1_move(pose)` → task_id, poll with `task_status` until `phase == "arrived"`
+5. `robot_look(focus=target)` — check if target is visible
+6. If visible: execute standard navigation (robot_look → s2_locate → s1_move → poll → verify)
+7. If not visible and exploration count < 3: go back to step 1
+8. If count > 3: inform user target not found, request more information or suggest alternatives
 
-## 注意事项
+## Notes
 
-- 每次 scan 前先用 `robot_look()` 看当前方向，避免冗余旋转
-- 优先选择"门"、"走廊"、"开口"等方向延伸搜索范围
-- 如果 task_status 返回 `status: "failed"`，分析 `error` / `s2_interpretation` 再决定是否重试
-- scan 默认角度为 0°、90°、180°、270°；若某方向明显更有希望，可传 `angles=[angle]` 单独扫
+- Before each scan, use `robot_look()` to check the current direction first, to avoid redundant rotation
+- Prefer extending search in directions with "doors", "corridors", or "openings"
+- If `task_status` returns `status: "failed"`, analyze `error` / `s2_interpretation` before deciding whether to retry
+- `scan` defaults to 0°, 90°, 180°, 270°; if one direction looks more promising, pass `angles=[angle]` to scan only that direction

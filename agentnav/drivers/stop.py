@@ -6,10 +6,18 @@ and publishes zero velocity to /cmd_vel. Latency < 50 ms.
 """
 from mcp.server.fastmcp import FastMCP
 
+DRIVER_META = {
+    "triggers": ["stop", "halt", "emergency stop", "freeze", "abort", "emergency"],
+    "safety_level": "danger",
+    "phase": 1,
+    "description": "Emergency stop: sets stop flag and cancels all running tasks.",
+}
 
-def register(mcp: FastMCP, state, task_mgr, ros_client, s2_client) -> None:
 
-    @mcp.tool()
+def register(mcp: FastMCP, state, task_mgr, ros_client, s2_client, meta=None) -> None:
+    from agentnav.bridge_core.driver_meta import meta_suffix
+    _sfx = meta_suffix(meta) if meta else ""
+
     def robot_stop() -> str:
         """
         Immediately stop all robot motion and cancel any active navigation task.
@@ -29,3 +37,5 @@ def register(mcp: FastMCP, state, task_mgr, ros_client, s2_client) -> None:
                 task_mgr.cancel(tid)
 
         return "Robot stopped. Emergency stop flag set."
+
+    mcp.tool(description=(robot_stop.__doc__ or "").strip() + _sfx)(robot_stop)

@@ -61,7 +61,7 @@ class QQChannel(BaseChannel):
         self.config: QQConfig = config
         self._client: "botpy.Client | None" = None
         self._processed_ids: deque = deque(maxlen=1000)
-        self._msg_seq: int = 1  # 消息序列号，避免被 QQ API 去重
+        self._msg_seq: int = 1  # message sequence number to avoid QQ API deduplication
         self._chat_type_cache: dict[str, str] = {}
 
     async def start(self) -> None:

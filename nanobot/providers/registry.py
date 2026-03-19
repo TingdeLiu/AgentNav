@@ -128,7 +128,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         strip_model_prefix=True,  # anthropic/claude-3 → claude-3 → openai/claude-3
         model_overrides=(),
     ),
-    # SiliconFlow (硅基流动): OpenAI-compatible gateway, model names keep org prefix
+    # SiliconFlow: OpenAI-compatible gateway, model names keep org prefix
     ProviderSpec(
         name="siliconflow",
         keywords=("siliconflow",),
@@ -146,7 +146,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         model_overrides=(),
     ),
 
-    # VolcEngine (火山引擎): OpenAI-compatible gateway, pay-per-use models
+    # VolcEngine: OpenAI-compatible gateway, pay-per-use models
     ProviderSpec(
         name="volcengine",
         keywords=("volcengine", "volces", "ark"),
@@ -164,7 +164,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         model_overrides=(),
     ),
 
-    # VolcEngine Coding Plan (火山引擎 Coding Plan): same key as volcengine
+    # VolcEngine Coding Plan: same key as volcengine
     ProviderSpec(
         name="volcengine_coding_plan",
         keywords=("volcengine-plan",),

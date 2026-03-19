@@ -158,9 +158,19 @@ def _parse_topic_info(output: str) -> dict:
 
 # ── Driver registration ───────────────────────────────────────────────────────
 
-def register(mcp: FastMCP, state, task_mgr, ros_client, s2_client) -> None:  # noqa: ARG001
+DRIVER_META = {
+    "triggers": ["ros nodes", "ros topics", "inspect robot", "what topics", "ros services",
+                 "list nodes", "discover robot", "ros2"],
+    "safety_level": "caution",
+    "phase": 1,
+    "description": "ROS2 dynamic discovery: list nodes, topics, services, echo/pub messages.",
+}
 
-    @mcp.tool()
+
+def register(mcp: FastMCP, state, task_mgr, ros_client, s2_client, meta=None) -> None:  # noqa: ARG001
+    from agentnav.bridge_core.driver_meta import meta_suffix
+    _sfx = meta_suffix(meta) if meta else ""
+
     async def ros_list_nodes() -> dict:
         """
         List all running ROS2 nodes on the current ROS_DOMAIN_ID.
@@ -183,6 +193,8 @@ def register(mcp: FastMCP, state, task_mgr, ros_client, s2_client) -> None:  # n
                     "returncode": rc, "ros_domain_id": _domain_id()}
         nodes = [l.strip() for l in stdout.splitlines() if l.strip()]
         return {"nodes": nodes, "count": len(nodes), "ros_domain_id": _domain_id()}
+
+    mcp.tool(description=(ros_list_nodes.__doc__ or "").strip() + _sfx)(ros_list_nodes)
 
     @mcp.tool()
     async def ros_list_topics(show_types: bool = False) -> dict:

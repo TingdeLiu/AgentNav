@@ -63,6 +63,7 @@ DRIVERS_DIR = Path(__file__).parent.parent / "drivers"
 
 def _load_drivers() -> None:
     """Import every non-private *.py in drivers/ and call register()."""
+    from agentnav.bridge_core.driver_meta import validate_driver_meta
     loaded = []
     for f in sorted(DRIVERS_DIR.glob("*.py")):
         if f.name.startswith("_"):
@@ -71,7 +72,10 @@ def _load_drivers() -> None:
         try:
             mod = importlib.import_module(module_name)
             if hasattr(mod, "register"):
-                mod.register(mcp, state, task_mgr, ros_client, s2_client)
+                meta = getattr(mod, "DRIVER_META", None)
+                if meta is not None:
+                    validate_driver_meta(meta, f.stem)
+                mod.register(mcp, state, task_mgr, ros_client, s2_client, meta)
                 loaded.append(f.stem)
         except Exception:
             logger.exception("Failed to load driver: %s", f.name)

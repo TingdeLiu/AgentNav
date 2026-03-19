@@ -4,10 +4,18 @@ robot_status — snapshot of robot state.
 """
 from mcp.server.fastmcp import FastMCP
 
+DRIVER_META = {
+    "triggers": ["robot state", "where is the robot", "battery", "pose", "status", "how is the robot"],
+    "safety_level": "safe",
+    "phase": 1,
+    "description": "Returns navigation state, pose, battery level, and velocity snapshot.",
+}
 
-def register(mcp: FastMCP, state, task_mgr, ros_client, s2_client) -> None:
 
-    @mcp.tool()
+def register(mcp: FastMCP, state, task_mgr, ros_client, s2_client, meta=None) -> None:
+    from agentnav.bridge_core.driver_meta import meta_suffix
+    _sfx = meta_suffix(meta) if meta else ""
+
     def robot_status() -> dict:
         """
         Return the robot's current navigation state, odometry pose,
@@ -28,3 +36,5 @@ def register(mcp: FastMCP, state, task_mgr, ros_client, s2_client) -> None:
             "battery_pct": state.battery_pct,
             "velocity": state.velocity,
         }
+
+    mcp.tool(description=(robot_status.__doc__ or "").strip() + _sfx)(robot_status)

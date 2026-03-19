@@ -480,7 +480,7 @@ nanobot gateway
 </details>
 
 <details>
-<summary><b>Feishu (飞书)</b></summary>
+<summary><b>Feishu</b></summary>
 
 Uses **WebSocket** long connection — no public IP required.
 
@@ -527,19 +527,19 @@ nanobot gateway
 </details>
 
 <details>
-<summary><b>QQ (QQ单聊)</b></summary>
+<summary><b>QQ (private chat)</b></summary>
 
 Uses **botpy SDK** with WebSocket — no public IP required. Currently supports **private messages only**.
 
 **1. Register & create bot**
 - Visit [QQ Open Platform](https://q.qq.com) → Register as a developer (personal or enterprise)
 - Create a new bot application
-- Go to **开发设置 (Developer Settings)** → copy **AppID** and **AppSecret**
+- Go to **Developer Settings** → copy **AppID** and **AppSecret**
 
 **2. Set up sandbox for testing**
-- In the bot management console, find **沙箱配置 (Sandbox Config)**
-- Under **在消息列表配置**, click **添加成员** and add your own QQ number
-- Once added, scan the bot's QR code with mobile QQ → open the bot profile → tap "发消息" to start chatting
+- In the bot management console, find **Sandbox Config**
+- Under **Message List Config**, click **Add member** and add your own QQ number
+- Once added, scan the bot's QR code with mobile QQ → open the bot profile → tap "Send message" to start chatting
 
 **3. Configure**
 
@@ -570,7 +570,7 @@ Now send a message to the bot from QQ — it should respond!
 </details>
 
 <details>
-<summary><b>DingTalk (钉钉)</b></summary>
+<summary><b>DingTalk</b></summary>
 
 Uses **Stream Mode** — no public IP required.
 
@@ -702,7 +702,7 @@ nanobot gateway
 </details>
 
 <details>
-<summary><b>Wecom (企业微信)</b></summary>
+<summary><b>Wecom</b></summary>
 
 > Here we use [wecom-aibot-sdk-python](https://github.com/chengyongru/wecom_aibot_sdk) (community Python version of the official [@wecom/aibot-node-sdk](https://www.npmjs.com/package/@wecom/aibot-node-sdk)).
 >
@@ -779,7 +779,7 @@ Config file: `~/.nanobot/config.json`
 | `gemini` | LLM (Gemini direct) | [aistudio.google.com](https://aistudio.google.com) |
 | `minimax` | LLM (MiniMax direct) | [platform.minimaxi.com](https://platform.minimaxi.com) |
 | `aihubmix` | LLM (API gateway, access to all models) | [aihubmix.com](https://aihubmix.com) |
-| `siliconflow` | LLM (SiliconFlow/硅基流动) | [siliconflow.cn](https://siliconflow.cn) |
+| `siliconflow` | LLM (SiliconFlow) | [siliconflow.cn](https://siliconflow.cn) |
 | `dashscope` | LLM (Qwen) | [dashscope.console.aliyun.com](https://dashscope.console.aliyun.com) |
 | `moonshot` | LLM (Moonshot/Kimi) | [platform.moonshot.cn](https://platform.moonshot.cn) |
 | `zhipu` | LLM (Zhipu GLM) | [open.bigmodel.cn](https://open.bigmodel.cn) |

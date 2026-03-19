@@ -5,10 +5,10 @@ def test_extract_post_content_supports_post_wrapper_shape() -> None:
     payload = {
         "post": {
             "zh_cn": {
-                "title": "日报",
+                "title": "Daily report",
                 "content": [
                     [
-                        {"tag": "text", "text": "完成"},
+                        {"tag": "text", "text": "Done"},
                         {"tag": "img", "image_key": "img_1"},
                     ]
                 ],
@@ -18,7 +18,7 @@ def test_extract_post_content_supports_post_wrapper_shape() -> None:
 
     text, image_keys = _extract_post_content(payload)
 
-    assert text == "日报 完成"
+    assert text == "Daily report Done"
     assert image_keys == ["img_1"]
 
 

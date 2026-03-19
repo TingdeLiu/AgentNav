@@ -37,7 +37,7 @@ AgentNav flips this. Navigation becomes a conversation between the agent and the
 |-------------|----------|
 | `navigate(target)` → success/fail | Agent perceives → decides → monitors → recovers |
 | Agent blind to progress | Agent polls phase, distance, S2 interpretation |
-| Failure = retry blindly | Failure = agent re-reads scene, replans |
+| Failure = retry blindly | Built-in retry with backoff + agent-level replanning |
 | Target must be predefined | Natural language + live camera |
 
 ---
@@ -49,7 +49,7 @@ AgentNav flips this. Navigation becomes a conversation between the agent and the
 │  AI Agent (LLM + nanobot / any MCP) │
 │  Telegram / Slack / CLI             │
 ├─────────────────────────────────────┤
-│  MCP Tool Layer (robothub)          │
+│  MCP Tool Layer (agentnav)          │
 │  robot_look · robot_navigate        │
 │  robot_scan · robot_stop · status   │
 ├─────────────────────────────────────┤
@@ -69,7 +69,7 @@ graph TB
         CHAN["Channel\n(Telegram / CLI)"]
     end
 
-    subgraph RoboHub["robothub — MCP Server"]
+    subgraph RoboHub["agentnav — MCP Server"]
         LOOK["robot_look\nrobot_scan\nrobot_capture"]
         NAV["robot_navigate\nrobot_explore"]
         CTRL["robot_stop\nrobot_status\ntask_status"]
@@ -125,7 +125,7 @@ The agent controls the robot through these tools:
 | `robot_explore(hint?)` | Actively search for a target not currently visible. Returns `task_id`. |
 | `robot_stop()` | Emergency stop. Latency < 50ms. |
 | `robot_status()` | Current pose, velocity, battery, nav state. |
-| `task_status(task_id)` | Poll navigate/explore progress: phase, distance, elapsed, S2 interpretation. |
+| `task_status(task_id)` | Poll navigate/explore progress. Status: `running` \| `retrying` \| `completed` \| `failed` \| `cancelled`. Includes `retries` and `last_retry_reason` when applicable. |
 | `task_cancel(task_id)` | Cancel task and stop robot. |
 
 ### ROS2 Introspection Tools
@@ -165,10 +165,21 @@ robot_navigate("Go through the door") → task_id
 robot_navigate("Move to kitchen center") → task_id
 ```
 
-### C — Navigation failed, agent replans
+### C — Transient failure, built-in retry recovers automatically
 
 ```
-task_status(id) → {status: "failed", reason: "S2 could not locate target"}
+robot_navigate("Go to the black chair") → task_id
+
+task_status(id) → {status: "retrying", retries: 1,
+                   last_retry_reason: "S1 connection timeout"}
+task_status(id) → {status: "retrying", retries: 2, ...}
+task_status(id) → {status: "completed", retries: 2} ✓
+```
+
+If retries are exhausted, the agent replans:
+
+```
+task_status(id) → {status: "failed", error: "S2 could not locate target"}
 robot_look() → "chair partially behind table, only leg visible"
 robot_navigate("Go to the chair leg visible behind the table") → task_id
 [arrived] ✓
@@ -177,7 +188,7 @@ robot_navigate("Go to the chair leg visible behind the table") → task_id
 ### D — Emergency stop
 
 ```
-User: "停"
+User: "stop"
 Agent: robot_stop() → "Robot stopped."
 ```
 
@@ -204,6 +215,62 @@ Agent: ros_list_nodes()
 
 ---
 
+## Driver System
+
+AgentNav's MCP tools are implemented as **hot-reloadable drivers** in `agentnav/drivers/`. Drop a new `*.py` file in that directory and send `/restart bridge` — no conversation history is lost.
+
+### Driver Metadata
+
+Each driver exports a `DRIVER_META` dict that makes LLM routing more precise:
+
+```python
+# agentnav/drivers/stop.py
+DRIVER_META = {
+    "triggers":      ["stop", "halt", "emergency stop", "freeze", "abort"],
+    "safety_level":  "danger",   # "safe" | "caution" | "danger"
+    "phase":         1,          # 1 | 2 | 3
+    "description":   "Emergency stop: sets stop flag and cancels all running tasks.",
+}
+```
+
+The bridge server validates this at load time and appends it to each tool's MCP description:
+
+```
+[safety:danger | phase:1 | triggers: stop, halt, emergency stop, freeze, abort]
+```
+
+This suffix is visible to the LLM, so it can route naturally-worded user messages ("freeze the robot!") to the right tool without hallucinating.
+
+### Built-in Retry Strategy
+
+`TaskManager` provides configurable retry with backoff and jitter — inspired by ClawSkill's
+mechanical-arm retry pattern (random offset on pickup failure):
+
+```python
+# Defaults — configurable per TaskManager instance
+TaskManager(
+    state,
+    max_retries   = 3,
+    retry_delay_s = 2.0,
+    backoff       = "fixed",   # "fixed" | "exponential"
+    jitter_s      = 0.0,       # adds random uniform delay to avoid thundering-herd
+)
+```
+
+Pass a **factory** (callable) to get retries; a bare coroutine runs once only:
+
+```python
+# Retries on transient failure — recommended
+task_id = task_mgr.start(lambda: s1_client.navigate_to(pose), instruction="go to chair")
+
+# One-shot (no retries) — for backwards compatibility
+task_id = task_mgr.start(some_coroutine(), instruction="go to chair")
+```
+
+`CancelledError` is never retried — `robot_stop()` always wins regardless of retry state.
+
+---
+
 ## Project Structure
 
 ```
@@ -214,15 +281,21 @@ AgentNav/
 │   ├── providers/           ← LiteLLM, Azure OpenAI, Codex ...
 │   └── tools/               ← filesystem, shell, web, MCP, cron
 │
-├── robothub/                ← MCP server (runs on Jetson, Python 3.10)
-│   ├── bridge_core/         ← RobotState, TaskManager, MCP server entry
-│   └── drivers/             ← look, navigate, stop, status, task (hot-reloadable)
-│
-└── agentnav/                ← Navigation core (S2 + S1, 0 lines modified)
-    ├── server/              ← S2 HTTP server (Qwen3-VL / Gemini)
-    ├── clients/             ← NavDP client, Nav2 client
-    ├── core/                ← AgentNavPipeline
-    └── robot/               ← ROS2 node, MPC/PID controllers
+└── agentnav/                ← Navigation core + MCP server (Python 3.10, runs on Jetson)
+    ├── bridge_core/         ← MCP server entry, RobotState, TaskManager, driver loader
+    │   ├── server.py        ← FastMCP stdio server, hot-loads drivers/
+    │   ├── robot_state.py   ← Thread-safe state machine (IDLE→MOVING→ARRIVED/FAILED)
+    │   ├── task_manager.py  ← Async task lifecycle with retry/backoff
+    │   └── driver_meta.py   ← DRIVER_META schema validation and LLM description injection
+    ├── drivers/             ← Hot-reloadable MCP tool implementations
+    │   ├── stop.py          ← robot_stop (safety:danger)
+    │   ├── status.py        ← robot_status (safety:safe)
+    │   └── ros_introspect.py← ros_list_nodes/topics/services/echo/pub/call (safety:caution)
+    ├── core/                ← S2 and ROS2 client stubs (Phase 2+)
+    │   ├── s2_client.py     ← HTTP client for Qwen3-VL / Gemini
+    │   └── ros_client.py    ← ROS2 subscriber, odometry, camera frames
+    ├── skills/              ← Claude Code skills for development
+    └── config/              ← nanobot integration config
 ```
 
 ---
@@ -263,10 +336,10 @@ This script:
 ### 4. Talk to your robot via Telegram
 
 ```
-You: 停
+You: stop
 Bot: Robot stopped. Emergency stop flag set.
 
-You: 机器人现在在哪，状态如何
+You: Where is the robot and what is its status
 Bot: {
        "nav_state": "idle",
        "pose": {"x": 1.2, "y": 0.8, "theta": 0.3},
@@ -327,6 +400,8 @@ sudo apt install ros-humble-nav2-bringup ros-humble-nav2-msgs \
 - [x] MCP tool layer for agentic control
 - [x] nanobot agent OS integration (Telegram / CLI)
 - [x] ROS2 introspection tools — agent discovers any robot's nodes/topics/services dynamically
+- [x] Driver metadata system — trigger-based LLM routing, safety levels, phase tagging
+- [x] Built-in retry/backoff in TaskManager — fixed/exponential + jitter, CancelledError-safe
 - [ ] `robot_look` / `robot_scan` perception tools (Phase 2)
 - [ ] `s2_locate` + `s1_move` locate-and-move pipeline (Phase 3)
 - [ ] `robot_explore` active target search
@@ -343,6 +418,7 @@ sudo apt install ros-humble-nav2-bringup ros-humble-nav2-msgs \
 - [InternRobotics/NavDP](https://github.com/InternRobotics/NavDP) — S1 neural navigation policy
 - [Google Gemini API](https://aistudio.google.com/) — S2 cloud provider
 - [Nav2](https://nav2.ros.org/) — S1 traditional navigation stack
+- [SenseRobotClaw/ClawSkill](https://github.com/SenseRobotClaw/ClawSkill) — inspiration for driver metadata and retry patterns
 
 ---
 
