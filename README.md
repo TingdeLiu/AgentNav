@@ -12,7 +12,7 @@
 Instead of issuing a single `navigate("go to chair")` call and hoping for the best, AgentNav exposes navigation as a set of independent tools that an AI agent (via MCP) can reason over: *look*, *navigate*, *scan*, *stop*, *status*. The agent decides when to perceive, when to move, when to retry, and when to give up — just like a human operator would.
 
 ```
-User: "去黑色椅子"
+User: "Go to the black chair"
 
 Agent: robot_look(focus="black chair")
        → "I see a black chair at 2 o'clock, ~2m away"
