@@ -3,26 +3,27 @@
 <p>
   <img src="https://img.shields.io/badge/status-active_development-green" alt="status">
   <img src="https://img.shields.io/badge/open-source-blue" alt="open source">
-  <img src="https://img.shields.io/badge/platform-ROS2_%7C_Jetson-orange" alt="platform">
+  <img src="https://img.shields.io/badge/ROS2-Humble-orange" alt="ROS2 Humble">
   <img src="https://img.shields.io/badge/agent-MCP_compatible-black" alt="MCP">
 </p>
 
 **AgentNav** is an open-source framework for agentic robot navigation — let an AI agent drive your robot with natural language.
 
-Instead of issuing a single `navigate("go to chair")` call and hoping for the best, AgentNav exposes navigation as a set of independent tools that an AI agent (via MCP) can reason over: *look*, *navigate*, *scan*, *stop*, *status*. The agent decides when to perceive, when to move, when to retry, and when to give up — just like a human operator would.
+Instead of issuing a single `navigate("go to chair")` call and hoping for the best, AgentNav exposes navigation as a set of independent, single-purpose tools that a multimodal AI agent (via MCP) can reason over. The agent perceives the scene with its own vision, plans the move, executes, monitors progress, and recovers from failures — all through tool calls.
 
 ```
 User: "Go to the black chair"
 
-Agent: robot_look(focus="black chair")
-       → "I see a black chair at 2 o'clock, ~2m away"
+Agent: robot_capture()
+       → [sees black chair at 2 o'clock, ~2m away]
 
-       robot_navigate("Go to the black chair") → task_id=a1b2
+       pixel_to_pose(u=380, v=290) → {x: 1.8, y: 0.3, theta: 0.1}
+       s1_move({x: 1.8, y: 0.3, theta: 0.1}) → task_id=a1b2
 
        task_status("a1b2") → {phase: "moving", distance: 0.8m}
        task_status("a1b2") → {phase: "arrived"}
 
-       robot_look() → "I'm standing next to the black chair" ✓
+       robot_capture() → [confirmed standing next to the black chair] ✓
 ```
 
 ---
@@ -35,97 +36,62 @@ AgentNav flips this. Navigation becomes a conversation between the agent and the
 
 | Traditional | AgentNav |
 |-------------|----------|
-| `navigate(target)` → success/fail | Agent perceives → decides → monitors → recovers |
-| Agent blind to progress | Agent polls phase, distance, S2 interpretation |
-| Failure = retry blindly | Built-in retry with backoff + agent-level replanning |
-| Target must be predefined | Natural language + live camera |
+| `navigate(target)` → success/fail | Agent perceives → locates → executes → monitors → recovers |
+| Requires separate VLM service | Agent's own vision (Claude/Gemini native multimodal) |
+| Agent blind to progress | Agent polls phase, distance, interpretation |
+| Failure = retry blindly | Agent replans with better description on failure |
+| Target must be predefined | Natural language + live camera frame |
 
 ---
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────┐
-│  AI Agent (LLM + nanobot / any MCP) │
-│  Telegram / Slack / CLI             │
-├─────────────────────────────────────┤
-│  MCP Tool Layer (agentnav)          │
-│  robot_look · robot_navigate        │
-│  robot_scan · robot_stop · status   │
-├─────────────────────────────────────┤
-│  Navigation Core (agentnav)         │
-│  S2: Vision-Language Understanding  │  ← Qwen3-VL (local) or Gemini (cloud)
-│  S1: Motion Execution               │  ← NavDP (neural) or Nav2/MPPI (traditional)
-├─────────────────────────────────────┤
-│  Hardware: ROS2 / Jetson            │
-│  RGB-D Camera · /cmd_vel · /odom    │
-└─────────────────────────────────────┘
+┌──────────────────────────────────────────────┐
+│  AI Agent (LLM — Claude / Gemini / GPT)       │
+│  Native multimodal vision · Telegram / CLI    │
+├──────────────────────────────────────────────┤
+│  MCP Tool Layer (agentnav drivers)            │
+│  capture · scan · pixel_to_pose              │
+│  s1_move · stop · status · task_status       │
+│  ros_list_nodes/topics/echo/pub/call         │
+├──────────────────────────────────────────────┤
+│  Navigation Middleware (bridge_core)          │
+│  RobotState · TaskManager (retry/backoff)    │
+├──────────────────────────────────────────────┤
+│  ROS2 Client (core/ros_client.py)             │
+│  /camera/color/image_raw  → push_frame()     │
+│  /camera/depth/image_raw  → push_depth()     │
+│  /camera/color/camera_info → intrinsics      │
+│  /odom  ·  /PowerVoltage  ·  /cmd_vel        │
+├──────────────────────────────────────────────┤
+│  Hardware: ROS2 Humble / Wheeltec robot       │
+│  RGB-D Camera · Nav2 · /cmd_vel · /odom      │
+└──────────────────────────────────────────────┘
 ```
 
-```mermaid
-graph TB
-    subgraph Agent["AI Agent (nanobot)"]
-        LLM["LLM Reasoning\n(Claude / GPT / Qwen)"]
-        CHAN["Channel\n(Telegram / CLI)"]
-    end
-
-    subgraph RoboHub["agentnav — MCP Server"]
-        LOOK["robot_look\nrobot_scan\nrobot_capture"]
-        NAV["robot_navigate\nrobot_explore"]
-        CTRL["robot_stop\nrobot_status\ntask_status"]
-    end
-
-    subgraph Core["agentnav — Navigation Core"]
-        S2["S2: Scene Understanding\n(Qwen3-VL / Gemini)"]
-        S1A["S1: NavDP\n(neural policy)"]
-        S1B["S1: Nav2 + MPPI\n(traditional)"]
-    end
-
-    subgraph HW["Hardware (Jetson + ROS2)"]
-        CAM["RGB-D Camera"]
-        ROBOT["Mobile Robot"]
-    end
-
-    CHAN --> LLM
-    LLM -->|MCP tool calls| LOOK & NAV & CTRL
-    LOOK & NAV --> S2
-    NAV --> S1A & S1B
-    S2 <--> CAM
-    S1A & S1B -->|cmd_vel| ROBOT
-```
-
-### S2 — Scene Understanding
-
-| Provider | Hardware | Notes |
-|----------|----------|-------|
-| Qwen3-VL | GPU (≥16GB VRAM) | Local inference, best accuracy |
-| Gemini API | None (cloud) | No GPU needed, internet required |
-
-### S1 — Navigation Execution
-
-| Mode | Algorithm | When to use |
-|------|-----------|-------------|
-| NavDP (default) | Neural diffusion policy | Unstructured environments, no map needed |
-| Nav2 / MPPI | Traditional planner | Mapped environments, predictable paths |
+**Key design principle**: The agent is the brain. Tools are single-purpose and contain no chained logic. Complex behaviours (scan → locate → move, explore, recover) are taught to the agent via **skills** — markdown files the agent reads, not hardcoded pipelines.
 
 ---
 
 ## MCP Tool Reference
 
-The agent controls the robot through these tools:
-
-### Navigation Tools
+### Perception Tools
 
 | Tool | Description |
 |------|-------------|
-| `robot_look(focus?)` | Describe current scene via S2. Pass a focus target to check visibility. |
-| `robot_scan(angles?)` | Rotate to multiple angles (default 0/90/180/270°), describe each direction. |
-| `robot_capture()` | Return raw camera frame as base64. |
-| `robot_navigate(instruction)` | Natural language → S2 pose → S1 execution. Returns `task_id`. |
-| `robot_explore(hint?)` | Actively search for a target not currently visible. Returns `task_id`. |
-| `robot_stop()` | Emergency stop. Latency < 50ms. |
-| `robot_status()` | Current pose, velocity, battery, nav state. |
-| `task_status(task_id)` | Poll navigate/explore progress. Status: `running` \| `retrying` \| `completed` \| `failed` \| `cancelled`. Includes `retries` and `last_retry_reason` when applicable. |
+| `robot_capture()` | Return current camera frame as **ImageContent** — the agent perceives it directly with native vision. Use before navigating and after arriving to confirm. |
+| `robot_scan(angles?)` | Rotate to multiple angles (default 0/90/180/270°), return one frame per angle. Agent analyses all frames to find the best direction. |
+
+### Coordinate & Motion Tools
+
+| Tool | Description |
+|------|-------------|
+| `pixel_to_pose(u, v)` | Convert pixel coordinates from a captured frame to a robot-frame pose `{x, y, theta}`. Requires depth camera. |
+| `s1_move(pose)` | Send the robot to `{x, y, theta}` via Nav2 `NavigateToPose`. Returns `task_id` immediately — non-blocking. |
+| `robot_stop()` | Emergency stop. Sets stop flag polled at < 50ms. Cancels all running tasks. |
+| `robot_status()` | Current pose, velocity, battery %, nav state. |
+| `task_status(task_id)` | Poll navigation progress. Returns phase (`planning→moving→arrived/failed`), distance to goal, elapsed time. |
 | `task_cancel(task_id)` | Cancel task and stop robot. |
 
 ### ROS2 Introspection Tools
@@ -135,54 +101,56 @@ Let the agent discover any robot's capabilities without hardcoded knowledge:
 | Tool | Description |
 |------|-------------|
 | `ros_list_nodes()` | List all running ROS2 nodes. Start here with any new robot. |
-| `ros_list_topics(show_types?)` | List active topics. `show_types=True` includes message types. |
-| `ros_topic_info(topic)` | Message type, publisher/subscriber nodes. Warns on motion-control topics. |
-| `ros_topic_echo(topic, timeout_s?)` | Read one message from a topic. Returns `{"error":"timeout"}` if none arrives. |
+| `ros_list_topics(show_types?)` | List active topics with optional message types. |
+| `ros_topic_info(topic)` | Message type, publisher/subscriber count. Warns on motion-control topics. |
+| `ros_topic_echo(topic, timeout_s?)` | Read one message from a topic. |
 | `ros_service_list()` | List all services with types. |
-| `ros_topic_pub(topic, msg_type, data)` | Publish once to a topic. Motion topics always include a safety `warning`. |
-| `ros_service_call(service, srv_type, args?)` | Call a ROS2 service and return the response. |
+| `ros_topic_pub(topic, msg_type, data)` | Publish once. Motion topics always return a safety `warning`. |
+| `ros_service_call(service, srv_type, args?)` | Call a ROS2 service. |
 
 ---
 
 ## Agent Navigation Patterns
 
-### A — Target visible, navigate directly
+These patterns are taught to the agent via skills — not hardcoded in tools.
+
+### A — Target visible, navigate directly  (`skills/locate.md`)
 
 ```
-robot_look(focus="black chair") → visible at 2m
-robot_navigate("Go to the black chair") → task_id
+robot_capture()
+→ [sees black chair at 2 o'clock]
+→ agent estimates pixel (u=380, v=290)
+
+pixel_to_pose(380, 290) → {x: 1.8, y: 0.3, theta: 0.1}
+s1_move({x: 1.8, ...}) → task_id
 [poll task_status every 5s until arrived]
-robot_look() → confirm arrival
+robot_capture() → confirm arrival ✓
 ```
 
-### B — Target not visible, scan then navigate
+### B — Target not visible, scan and explore  (`skills/explore.md`)
 
 ```
-robot_look() → target not visible
-robot_scan() → "180°: door leading to corridor"
-robot_navigate("Go through the door") → task_id
-[arrived] → robot_look(focus="kitchen") → found
-robot_navigate("Move to kitchen center") → task_id
+robot_capture() → "no kitchen visible"
+robot_scan()    → [4 frames: office / corridor / door / storage]
+→ agent picks 180° frame (door), estimates pixel
+
+pixel_to_pose(310, 260) → {x: 3.2, y: 0.1, theta: 0.0}
+s1_move({x: 3.2, ...}) → task_id → [arrived]
+
+robot_capture() → "I see a refrigerator — this is the kitchen" ✓
 ```
 
-### C — Transient failure, built-in retry recovers automatically
+### C — Agent-level failure recovery
 
 ```
-robot_navigate("Go to the black chair") → task_id
+task_status(id) → {status: "failed", reason: "depth unavailable at pixel"}
 
-task_status(id) → {status: "retrying", retries: 1,
-                   last_retry_reason: "S1 connection timeout"}
-task_status(id) → {status: "retrying", retries: 2, ...}
-task_status(id) → {status: "completed", retries: 2} ✓
-```
+robot_capture()
+→ "chair partially behind table, only leg visible"
 
-If retries are exhausted, the agent replans:
-
-```
-task_status(id) → {status: "failed", error: "S2 could not locate target"}
-robot_look() → "chair partially behind table, only leg visible"
-robot_navigate("Go to the chair leg visible behind the table") → task_id
-[arrived] ✓
+# Re-estimate with better pixel coordinates
+pixel_to_pose(290, 350) → new_pose
+s1_move(new_pose) → task_id → [arrived] ✓
 ```
 
 ### D — Emergency stop
@@ -192,82 +160,86 @@ User: "stop"
 Agent: robot_stop() → "Robot stopped."
 ```
 
-### E — First contact with an unknown robot
+### E — First contact with a new robot  (`skills/ros_introspect.md`)
 
 ```
-Agent: ros_list_nodes()
-       → {nodes: ['/base_controller', '/lidar', '/camera_node'], count: 3}
+ros_list_nodes()
+→ ['/base_controller', '/lidar', '/camera_node', ...]
 
-       ros_list_topics(show_types=True)
-       → {topics: [{name: '/cmd_vel', type: 'geometry_msgs/msg/Twist'},
-                   {name: '/odom',    type: 'nav_msgs/msg/Odometry'},
-                   {name: '/scan',    type: 'sensor_msgs/msg/LaserScan'}, ...]}
+ros_list_topics(show_types=True)
+→ [{'/cmd_vel': 'geometry_msgs/msg/Twist'}, {'/odom': 'nav_msgs/msg/Odometry'}, ...]
 
-       ros_topic_echo('/odom', timeout_s=3)
-       → {message: {pose: {pose: {position: {x: 1.2, y: 0.8}}}, ...}}
+ros_topic_echo('/odom', timeout_s=3)
+→ {pose: {position: {x: 1.2, y: 0.8}}, ...}
+```
 
-       ros_topic_info('/cmd_vel')
-       → {publisher_count: 0, subscriber_count: 1,
-          warning: '/cmd_vel is a motion-control topic...'}
+### F — Install a new ROS2 package  (`skills/ros_package_install.md`)
 
-       → Agent now knows the robot's interface and can proceed with navigation
+```
+User: "install slam_toolbox: https://github.com/SteveMacenski/slam_toolbox"
+
+Agent: cd ~/ros2_ws/src && git clone <url>
+       rosdep install --from-paths src --ignore-src -r -y
+       colcon build --packages-select slam_toolbox --symlink-install
+       source install/setup.bash
+
+       ros2 pkg executables slam_toolbox
+       → async_slam_toolbox_node, sync_slam_toolbox_node ...
+
+       ros2 launch slam_toolbox online_async_launch.py &
+       ros_list_topics() → [/map, /pose, /slam_toolbox/scan_visualization ...]
+
+→ "slam_toolbox installed. Launch: ros2 launch slam_toolbox online_async_launch.py
+   Outputs: /map (OccupancyGrid), /pose. Needs: /scan (lidar)"
 ```
 
 ---
 
 ## Driver System
 
-AgentNav's MCP tools are implemented as **hot-reloadable drivers** in `agentnav/drivers/`. Drop a new `*.py` file in that directory and send `/restart bridge` — no conversation history is lost.
+MCP tools are implemented as **hot-reloadable drivers** in `agentnav/drivers/`. Drop a new `*.py` file there and send `/restart bridge` — no conversation history is lost.
 
 ### Driver Metadata
 
-Each driver exports a `DRIVER_META` dict that makes LLM routing more precise:
+Each driver exports a `DRIVER_META` dict for precise LLM routing:
 
 ```python
-# agentnav/drivers/stop.py
 DRIVER_META = {
-    "triggers":      ["stop", "halt", "emergency stop", "freeze", "abort"],
-    "safety_level":  "danger",   # "safe" | "caution" | "danger"
-    "phase":         1,          # 1 | 2 | 3
-    "description":   "Emergency stop: sets stop flag and cancels all running tasks.",
+    "triggers":     ["stop", "halt", "emergency stop", "freeze"],
+    "safety_level": "danger",   # "safe" | "caution" | "danger"
+    "phase":        1,
+    "description":  "Emergency stop: sets stop flag and cancels all running tasks.",
 }
 ```
 
-The bridge server validates this at load time and appends it to each tool's MCP description:
+The bridge appends this to each tool's MCP description:
 
 ```
-[safety:danger | phase:1 | triggers: stop, halt, emergency stop, freeze, abort]
+[safety:danger | phase:1 | triggers: stop, halt, emergency stop, freeze]
 ```
 
-This suffix is visible to the LLM, so it can route naturally-worded user messages ("freeze the robot!") to the right tool without hallucinating.
+### Built-in Retry / Backoff
 
-### Built-in Retry Strategy
-
-`TaskManager` provides configurable retry with backoff and jitter — inspired by ClawSkill's
-mechanical-arm retry pattern (random offset on pickup failure):
+`TaskManager` provides configurable retry with backoff and jitter:
 
 ```python
-# Defaults — configurable per TaskManager instance
 TaskManager(
     state,
     max_retries   = 3,
     retry_delay_s = 2.0,
     backoff       = "fixed",   # "fixed" | "exponential"
-    jitter_s      = 0.0,       # adds random uniform delay to avoid thundering-herd
+    jitter_s      = 0.0,
 )
 ```
 
 Pass a **factory** (callable) to get retries; a bare coroutine runs once only:
 
 ```python
-# Retries on transient failure — recommended
+# With retries — recommended
 task_id = task_mgr.start(lambda: s1_client.navigate_to(pose), instruction="go to chair")
-
-# One-shot (no retries) — for backwards compatibility
-task_id = task_mgr.start(some_coroutine(), instruction="go to chair")
 ```
 
-`CancelledError` is never retried — `robot_stop()` always wins regardless of retry state.
+`CancelledError` is never retried — `robot_stop()` always wins.
 
 ---
 
@@ -275,34 +247,41 @@ task_id = task_mgr.start(some_coroutine(), instruction="go to chair")
 
 ```
 AgentNav/
-├── nanobot/                 ← Agent OS (MCP client, Telegram/Slack/CLI channels)
+├── nanobot/                 ← Agent OS (MCP client, channels, LLM loop)
 │   ├── agent/               ← LLM loop, memory, skills, subagents
 │   ├── channels/            ← Telegram, Slack, Discord, WeChat, Email ...
 │   ├── providers/           ← LiteLLM, Azure OpenAI, Codex ...
 │   └── tools/               ← filesystem, shell, web, MCP, cron
 │
-└── agentnav/                ← Navigation core + MCP server (Python 3.10, runs on Jetson)
-    ├── bridge_core/         ← MCP server entry, RobotState, TaskManager, driver loader
+└── agentnav/                ← Navigation core + MCP server (Python 3.10)
+    ├── bridge_core/
     │   ├── server.py        ← FastMCP stdio server, hot-loads drivers/
-    │   ├── robot_state.py   ← Thread-safe state machine (IDLE→MOVING→ARRIVED/FAILED)
+    │   ├── robot_state.py   ← Thread-safe state (IDLE→MOVING→ARRIVED/FAILED)
     │   ├── task_manager.py  ← Async task lifecycle with retry/backoff
-    │   └── driver_meta.py   ← DRIVER_META schema validation and LLM description injection
-    ├── drivers/             ← Hot-reloadable MCP tool implementations
+    │   └── driver_meta.py   ← DRIVER_META schema + LLM description injection
+    ├── drivers/
     │   ├── stop.py          ← robot_stop (safety:danger)
     │   ├── status.py        ← robot_status (safety:safe)
-    │   └── ros_introspect.py← ros_list_nodes/topics/services/echo/pub/call (safety:caution)
-    ├── core/                ← S2 and ROS2 client stubs (Phase 2+)
-    │   ├── s2_client.py     ← HTTP client for Qwen3-VL / Gemini
-    │   └── ros_client.py    ← ROS2 subscriber, odometry, camera frames
-    ├── skills/              ← Claude Code skills for development
-    └── config/              ← nanobot integration config
+    │   ├── look.py          ← robot_capture, robot_scan → ImageContent
+    │   ├── perception.py    ← pixel_to_pose
+    │   └── ros_introspect.py← 7× ros_* discovery tools
+    ├── core/
+    │   ├── ros_client.py    ← ROS2 subscriptions: camera + odom + power
+    │   └── s1_client.py     ← Nav2 NavigateToPose action client (Phase 3)
+    ├── skills/
+    │   ├── ros_introspect.md      ← discover any robot's nodes/topics/services
+    │   ├── locate.md              ← capture → estimate (u,v) → pixel_to_pose
+    │   ├── explore.md             ← scan → locate → move loop
+    │   └── ros_package_install.md ← clone/apt → rosdep → colcon → learn
+    └── config/
+        └── nanobot_config.json    ← nanobot + MCP server config template
 ```
 
 ---
 
 ## Quick Start
 
-### 1. Install nanobot (agent OS)
+### 1. Install nanobot
 
 ```bash
 pip install nanobot-ai          # Python 3.11+
@@ -311,113 +290,93 @@ pip install nanobot-ai          # Python 3.11+
 ### 2. Set environment variables
 
 ```bash
-export ANTHROPIC_API_KEY=sk-ant-...          # Anthropic API key
-export TELEGRAM_BOT_TOKEN=123456:ABC-...     # from @BotFather
-export MY_TELEGRAM_ID=987654321              # your numeric ID (from @userinfobot)
-export NAVDP_PYTHON=/opt/conda/envs/navdp/bin/python   # Python 3.10 in navdp env
+export ANTHROPIC_API_KEY=sk-ant-...
+export TELEGRAM_BOT_TOKEN=123456:ABC-...
+export MY_TELEGRAM_ID=987654321              # from @userinfobot
+export NAVDP_PYTHON=/opt/conda/envs/navdp/bin/python
 
-# Optional (have defaults)
-export S2_HOST=127.0.0.1
-export S2_PORT=8890
-export S1_MODE=navdp
+# Optional — defaults shown
+export S1_MODE=nav2                          # nav2 (default) | navdp
+export S1_CHECKPOINT=                        # only for navdp mode
+# Topic names default to Wheeltec layout — override if your robot differs:
+# export TOPIC_COLOR_IMAGE=/camera/color/image_raw
+# export TOPIC_DEPTH_IMAGE=/camera/depth/image_raw
+# export TOPIC_ODOM=/odom
 ```
 
-### 3. Launch (installs agentnav + writes config + starts gateway)
+### 3. Launch
 
 ```bash
 bash agentnav/scripts/start_robot_agent.sh
 ```
 
-This script:
-1. Installs `agentnav` into your navdp Python env (editable)
-2. Writes `~/.nanobot/config.json` with your env vars substituted
-3. Runs `nanobot gateway` — nanobot launches the MCP server as a subprocess automatically
+This script installs `agentnav` into your Python env, writes `~/.nanobot/config.json`, and runs `nanobot gateway`. nanobot auto-launches the MCP bridge as a subprocess.
 
-### 4. Talk to your robot via Telegram
+### 4. Talk to your robot
 
 ```
 You: stop
 Bot: Robot stopped. Emergency stop flag set.
 
-You: Where is the robot and what is its status
+You: what's the robot's status?
 Bot: {
-       "nav_state": "idle",
-       "pose": {"x": 1.2, "y": 0.8, "theta": 0.3},
-       "battery_pct": 82,
-       "velocity": {"v": 0.0, "w": 0.0}
-     }
-```
+  "nav_state": "idle",
+  "pose": {"x": 1.2, "y": 0.8, "theta": 0.3},
+  "battery_pct": 76,
+  "battery_voltage": 11.8,
+  "velocity": {"v": 0.0, "w": 0.0}
+}
 
-Tools available now: `robot_stop`, `robot_status`, and all 7 `ros_*` introspection tools.
-Phase 2+ tools (after wiring ROS2 subscribers): `robot_look`, `robot_scan`, `s2_locate`, `s1_move`, `task_status`.
+You: what do you see in front of you?
+Bot: [captures camera frame → describes scene]
+
+You: go to the black chair
+Bot: [capture → estimate pixel → pixel_to_pose → s1_move → poll → confirm]
+```
 
 ---
 
-## Installation
+## Confirmed Hardware (Wheeltec ROS2 Humble)
 
-### S2 Server
-
-```bash
-conda create -n qwen3vl python=3.10
-conda activate qwen3vl
-pip install -r requirements_server.txt
-
-# Optional: Flash Attention (faster)
-pip install flash-attn --no-build-isolation
-
-# Download Qwen3-VL weights
-huggingface-cli download Qwen/Qwen3-VL-8B-Instruct --local-dir /path/to/weights
-```
-
-### Jetson Edge (NavDP)
-
-```bash
-conda create -n navdp python=3.10
-conda activate navdp
-
-# Clone NavDP as sibling of AgentNav
-git clone https://github.com/InternRobotics/NavDP ../NavDP
-pip install -r requirements_jetson.txt
-pip install -e .
-
-sudo apt install ros-humble-cv-bridge ros-humble-message-filters
-```
-
-### Jetson Edge (Nav2/MPPI)
-
-```bash
-sudo apt install ros-humble-nav2-bringup ros-humble-nav2-msgs \
-                 ros-humble-tf2-geometry-msgs ros-humble-slam-toolbox
-```
+| Topic | Type | Used for |
+|-------|------|----------|
+| `/camera/color/image_raw` | `sensor_msgs/Image` | RGB frames → agent vision |
+| `/camera/color/camera_info` | `sensor_msgs/CameraInfo` | Auto-load camera intrinsics |
+| `/camera/depth/image_raw` | `sensor_msgs/Image` (16UC1 mm) | Depth for pixel_to_pose |
+| `/odom` | `nav_msgs/Odometry` | Pose + velocity |
+| `/PowerVoltage` | `std_msgs/Float32` | Battery % (9.5–12.6V range) |
+| `/cmd_vel` | `geometry_msgs/Twist` | Emergency stop, rotate_to |
 
 ---
 
 ## Roadmap
 
-- [x] End-to-end language-to-navigation on real hardware
-- [x] NavDP (neural) and Nav2/MPPI (traditional) S1 backends
-- [x] Qwen3-VL (local) and Gemini (cloud) S2 backends
-- [x] MCP tool layer for agentic control
+- [x] MCP tool layer with hot-reloadable drivers
 - [x] nanobot agent OS integration (Telegram / CLI)
-- [x] ROS2 introspection tools — agent discovers any robot's nodes/topics/services dynamically
-- [x] Driver metadata system — trigger-based LLM routing, safety levels, phase tagging
-- [x] Built-in retry/backoff in TaskManager — fixed/exponential + jitter, CancelledError-safe
-- [ ] `robot_look` / `robot_scan` perception tools (Phase 2)
-- [ ] `s2_locate` + `s1_move` locate-and-move pipeline (Phase 3)
-- [ ] `robot_explore` active target search
-- [ ] Closed-loop failure recovery (agent replans on task_status failed)
+- [x] ROS2 introspection tools — agent discovers any robot dynamically
+- [x] Driver metadata — trigger-based routing, safety levels, phase tagging
+- [x] TaskManager retry/backoff (fixed/exponential + jitter)
+- [x] RobotState navigation state machine
+- [x] `robot_capture` / `robot_scan` → MCP ImageContent (Phase 2)
+- [x] `pixel_to_pose` — coordinate conversion tool (Phase 2)
+- [x] `ros_client.py` — live ROS2 subscriptions (camera + odom + power)
+- [x] `skills/locate.md` — agent-native locate workflow
+- [x] `skills/ros_package_install.md` — self-install any ROS2 package
+- [ ] End-to-end validation: `robot_capture` → agent describes scene (Phase 2)
+- [ ] `s1_client.py` — Nav2 NavigateToPose action client (Phase 3)
+- [ ] `s1_move` + `task_status` full pipeline (Phase 3)
+- [ ] End-to-end: "go to black chair" → robot arrives (Phase 3)
+- [ ] `pixel_to_pose` TF transform: camera_link → base_link (Phase 3)
 - [ ] Progress streaming to Telegram during navigation
-- [ ] Simulation environment for development and evaluation
-- [ ] Broader robot platform support
+- [ ] Closed-loop failure recovery validation
+- [ ] Simulation environment
 
 ---
 
 ## Acknowledgements
 
-- [QwenLM/Qwen3-VL](https://github.com/QwenLM/Qwen3-VL) — S2 vision-language model
-- [InternRobotics/NavDP](https://github.com/InternRobotics/NavDP) — S1 neural navigation policy
-- [Google Gemini API](https://aistudio.google.com/) — S2 cloud provider
-- [Nav2](https://nav2.ros.org/) — S1 traditional navigation stack
+- [Nav2](https://nav2.ros.org/) — S1 traditional navigation stack (primary)
+- [InternRobotics/NavDP](https://github.com/InternRobotics/NavDP) — S1 neural navigation policy (optional)
 - [SenseRobotClaw/ClawSkill](https://github.com/SenseRobotClaw/ClawSkill) — inspiration for driver metadata and retry patterns
 
 ---
@@ -427,9 +386,8 @@ sudo apt install ros-humble-nav2-bringup ros-humble-nav2-msgs \
 Contributions welcome in:
 
 - New S1 navigation backends (VLN policies, other planners)
-- New S2 vision-language providers
-- ROS2 integration and new robot platforms
-- Simulation environments
-- Benchmarking and evaluation tools
+- New robot platforms and ROS2 configurations
+- Simulation environments and evaluation tools
+- Multi-robot coordination
 
 Issues, PRs, and Discussions are open.

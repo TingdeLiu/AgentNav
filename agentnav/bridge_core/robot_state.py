@@ -11,8 +11,8 @@ from typing import Optional
 
 class NavState(Enum):
     IDLE     = "idle"
-    LOOKING  = "looking"   # S2 is interpreting the scene
-    PLANNING = "planning"  # S2 → pixel coords → pose
+    LOOKING  = "looking"   # agent is capturing / perceiving
+    PLANNING = "planning"  # pixel_to_pose in progress
     MOVING   = "moving"    # S1 is executing motion
     ARRIVED  = "arrived"
     FAILED   = "failed"
@@ -24,14 +24,15 @@ class RobotState:
     nav_state: NavState = NavState.IDLE
     _state_lock: threading.Lock = field(default_factory=threading.Lock)
 
-    # ── Latest perception (written by robot_look, readable by task_status) ──
+    # ── Latest perception (written by robot_capture / pixel_to_pose) ─────────
     last_scene: str = ""
-    last_s2_interpretation: str = ""
+    last_location: str = ""  # "target at pixel (u, v) → {x, y, theta}"
 
-    # ── Odometry (pushed by ros_client) ─────────────────────────────────────
+    # ── Odometry + power (pushed by ros_client) ──────────────────────────────
     pose: dict = field(default_factory=lambda: {"x": 0.0, "y": 0.0, "theta": 0.0})
     velocity: dict = field(default_factory=lambda: {"v": 0.0, "w": 0.0})
-    battery_pct: int = 100
+    battery_pct: int = -1       # -1 = not yet received from /PowerVoltage
+    battery_voltage: float = 0.0  # raw voltage from /PowerVoltage
 
     # ── Latest camera frame + depth (pushed by ros_client) ──────────────────
     latest_frame: Optional[bytes] = None
@@ -41,11 +42,9 @@ class RobotState:
     # ── Emergency stop flag (written by robot_stop, polled by ros_client) ───
     _stop_flag: bool = False
 
-    # ── S2 / S1 connection parameters ───────────────────────────────────────
-    s2_host: str = "127.0.0.1"
-    s2_port: int = 8890
-    s1_mode: str = "navdp"
-    s1_checkpoint: str = ""
+    # ── S1 connection parameters ─────────────────────────────────────────────
+    s1_mode: str = "nav2"       # nav2 (default) | navdp
+    s1_checkpoint: str = ""     # only used when s1_mode=navdp
 
     # ── State machine helpers ────────────────────────────────────────────────
     def set_nav_state(self, state: NavState) -> None:
@@ -68,11 +67,15 @@ class RobotState:
         return self._stop_flag
 
     # ── Camera frame ─────────────────────────────────────────────────────────
-    def push_frame(self, frame: bytes, depth=None) -> None:
+    def push_frame(self, frame: bytes) -> None:
+        """Update latest RGB frame. Called from ros_client color callback."""
         with self._frame_lock:
             self.latest_frame = frame
-            if depth is not None:
-                self.latest_depth = depth
+
+    def push_depth(self, depth) -> None:
+        """Update latest depth array (uint16 mm). Called from ros_client depth callback."""
+        with self._frame_lock:
+            self.latest_depth = depth
 
     def pop_frame(self) -> tuple[Optional[bytes], Optional[object]]:
         with self._frame_lock:

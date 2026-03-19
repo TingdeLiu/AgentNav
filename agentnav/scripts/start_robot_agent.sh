@@ -19,7 +19,6 @@
 #                         e.g. /opt/conda/envs/navdp/bin/python
 #
 # Optional env vars (have defaults):
-#   S2_HOST, S2_PORT        — S2 server address (default: 127.0.0.1:8890)
 #   S1_MODE                 — navdp | nav2  (default: navdp)
 #   S1_CHECKPOINT           — path to NavDP checkpoint file
 #   CAMERA_FX/FY/CX/CY     — camera intrinsics (default: 525/525/320/240)
@@ -39,14 +38,13 @@ echo "[setup] Checking required environment variables..."
 : "${NAVDP_PYTHON:?Set NAVDP_PYTHON (path to python3.10 in navdp env)}"
 
 # Defaults for optional vars
-export S2_HOST="${S2_HOST:-127.0.0.1}"
-export S2_PORT="${S2_PORT:-8890}"
-export S1_MODE="${S1_MODE:-navdp}"
+export S1_MODE="${S1_MODE:-nav2}"   # nav2 (default) | navdp
 export S1_CHECKPOINT="${S1_CHECKPOINT:-}"
-export CAMERA_FX="${CAMERA_FX:-525.0}"
-export CAMERA_FY="${CAMERA_FY:-525.0}"
-export CAMERA_CX="${CAMERA_CX:-320.0}"
-export CAMERA_CY="${CAMERA_CY:-240.0}"
+# Topic names default to Wheeltec layout — override if your robot differs:
+# export TOPIC_COLOR_IMAGE=/camera/color/image_raw
+# export TOPIC_DEPTH_IMAGE=/camera/depth/image_raw
+# export TOPIC_ODOM=/odom  (confirm once nav stack is running)
+# Camera intrinsics auto-read from /camera/color/camera_info — no need to set manually.
 
 # ── 2. Install agentnav into the navdp Python env ──────────────────────────────
 echo "[setup] Installing agentnav into navdp env: $NAVDP_PYTHON"
@@ -87,16 +85,9 @@ with open(out_path, "w") as f:
 print(f"[setup] Config written to {out_path}")
 PYEOF
 
-# ── 4. Optional: start S2 server in background ────────────────────────────────
-if [[ "${START_S2:-0}" == "1" ]]; then
-  echo "[setup] Starting S2 server (background)..."
-  bash "$SCRIPT_DIR/start_s2_server.sh" &
-  sleep 3
-fi
-
-# ── 5. Start nanobot gateway ───────────────────────────────────────────────────
+# ── 4. Start nanobot gateway ───────────────────────────────────────────────────
 echo "[setup] Starting nanobot gateway..."
 echo "        Telegram: send a message to your bot to start chatting."
-echo "        Available tools: robot_stop, robot_status"
+echo "        Available tools: robot_stop, robot_status, robot_capture, robot_scan, pixel_to_pose"
 echo ""
 exec nanobot gateway --config "$NANOBOT_CONFIG"

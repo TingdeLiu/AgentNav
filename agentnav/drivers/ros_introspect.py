@@ -167,7 +167,7 @@ DRIVER_META = {
 }
 
 
-def register(mcp: FastMCP, state, task_mgr, ros_client, s2_client, meta=None) -> None:  # noqa: ARG001
+def register(mcp: FastMCP, state, task_mgr, ros_client, meta=None) -> None:  # noqa: ARG001
     from agentnav.bridge_core.driver_meta import meta_suffix
     _sfx = meta_suffix(meta) if meta else ""
 
