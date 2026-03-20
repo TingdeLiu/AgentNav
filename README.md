@@ -59,7 +59,7 @@ AgentNav flips this. Navigation becomes a conversation between the agent and the
 ├──────────────────────────────────────────────┤
 │  Navigation Middleware (bridge_core)          │
 │  RobotState · TaskManager (retry/backoff)    │
-│  S1Client (Nav2 NavigateToPose action client)│
+│  S1Client · TelegramNotifier                 │
 ├──────────────────────────────────────────────┤
 │  ROS2 Client (core/ros_client.py)             │
 │  /camera/color/image_raw  → push_frame()     │
@@ -257,10 +257,11 @@ AgentNav/
 │
 └── agentnav/                ← Navigation core + MCP server (Python 3.10)
     ├── bridge_core/
-    │   ├── server.py        ← FastMCP stdio server, hot-loads drivers/
-    │   ├── robot_state.py   ← Thread-safe state (IDLE→MOVING→ARRIVED/FAILED)
-    │   ├── task_manager.py  ← Async task lifecycle with retry/backoff
-    │   └── driver_meta.py   ← DRIVER_META schema + LLM description injection
+    │   ├── server.py           ← FastMCP stdio server, hot-loads drivers/
+    │   ├── robot_state.py      ← Thread-safe state (IDLE→MOVING→ARRIVED/FAILED)
+    │   ├── task_manager.py     ← Async task lifecycle with retry/backoff
+    │   ├── driver_meta.py      ← DRIVER_META schema + LLM description injection
+    │   └── telegram_notifier.py← Edit-in-place progress messages during navigation
     ├── drivers/
     │   ├── stop.py          ← robot_stop (safety:danger)
     │   ├── status.py        ← robot_status (safety:safe)
@@ -374,10 +375,9 @@ Bot: [capture → estimate pixel → pixel_to_pose → s1_move → poll → conf
 - [x] `pixel_to_pose` base_link → map frame conversion via odometry (Phase 3)
 - [x] `skills/navigate.md` — full capture → locate → move → confirm workflow
 - [ ] End-to-end hardware validation: "go to black chair" → robot arrives
-- [ ] `pixel_to_pose` TF transform via `/tf_static` (camera tilt / non-planar mount)
-- [x] Progress streaming to Telegram during navigation (edit-in-place, 8 s throttle)
 - [ ] Closed-loop failure recovery validation
 - [ ] Simulation environment
+- n/a `pixel_to_pose` `/tf_static` transform — evaluated, not needed (horizontal camera mount)
 
 ---
 
