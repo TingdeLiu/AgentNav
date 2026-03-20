@@ -17,11 +17,13 @@ import asyncio
 import logging
 import math
 import threading
+import time
 from typing import TYPE_CHECKING, Optional
 
 if TYPE_CHECKING:
     from agentnav.bridge_core.robot_state import RobotState
     from agentnav.bridge_core.task_manager import TaskManager
+    from agentnav.bridge_core.telegram_notifier import TelegramNotifier
 
 logger = logging.getLogger(__name__)
 
@@ -42,9 +44,15 @@ class S1Client:
         task_id_ref[0] = task_id
     """
 
-    def __init__(self, state: "RobotState", task_mgr: "TaskManager"):
+    def __init__(
+        self,
+        state: "RobotState",
+        task_mgr: "TaskManager",
+        notifier: "Optional[TelegramNotifier]" = None,
+    ):
         self._state = state
         self._task_mgr = task_mgr
+        self._notifier = notifier
         self._node = None
         self._action_client = None
         self._nav2_ready = threading.Event()
@@ -135,6 +143,8 @@ class S1Client:
             )
 
         task_id: Optional[str] = task_id_ref[0]
+        notifier = self._notifier
+        t_start = time.monotonic()
 
         x = float(pose["x"])
         y = float(pose.get("y", 0.0))
@@ -143,6 +153,9 @@ class S1Client:
             "S1Client: navigate_to base_link=(%.3f, %.3f, %.3f)",
             x, y, theta,
         )
+
+        if notifier:
+            notifier.reset()
 
         from nav2_msgs.action import NavigateToPose
 
@@ -165,12 +178,19 @@ class S1Client:
             gh = future.result()
             if not gh.accepted:
                 error_ref[0] = "Nav2 rejected the goal (plan failed or invalid pose)"
+                if notifier:
+                    notifier.send("Navigation failed: goal rejected by Nav2.", force=True)
                 goal_event.set()
                 result_event.set()
                 return
             goal_handle_ref[0] = gh
             if task_id:
                 self._task_mgr.update(task_id, phase="moving")
+            if notifier:
+                notifier.send(
+                    f"Navigation started.\nGoal: ({x:.2f} m forward, {y:.2f} m lateral)",
+                    force=True,
+                )
             goal_event.set()
             result_future = gh.get_result_async()
             result_future.add_done_callback(on_result)
@@ -179,6 +199,9 @@ class S1Client:
             dist = round(getattr(feedback_msg.feedback, "distance_remaining", 0.0), 2)
             if task_id:
                 self._task_mgr.update(task_id, distance_to_goal_m=dist)
+            if notifier:
+                elapsed = int(time.monotonic() - t_start)
+                notifier.send(f"Navigating...\nDistance: {dist} m remaining | {elapsed} s")
 
         def on_result(future):
             result = future.result()
@@ -205,6 +228,8 @@ class S1Client:
         # ── Wait for goal acceptance ──────────────────────────────────────────
         while not goal_event.is_set():
             if self._state.should_stop:
+                if notifier:
+                    notifier.send("Navigation cancelled.", force=True)
                 raise asyncio.CancelledError("robot_stop() called before goal accepted")
             await asyncio.sleep(0.2)
 
@@ -217,12 +242,19 @@ class S1Client:
                 gh = goal_handle_ref[0]
                 if gh is not None:
                     gh.cancel_goal_async()
+                if notifier:
+                    notifier.send("Navigation cancelled.", force=True)
                 raise asyncio.CancelledError("robot_stop() called during navigation")
             await asyncio.sleep(0.5)
 
         if error_ref[0]:
+            if notifier:
+                notifier.send(f"Navigation failed.\n{error_ref[0]}", force=True)
             raise RuntimeError(error_ref[0])
 
+        elapsed = int(time.monotonic() - t_start)
         if task_id:
             self._task_mgr.update(task_id, phase="arrived", distance_to_goal_m=0.0)
-        logger.info("S1Client: task %s arrived at goal", task_id)
+        if notifier:
+            notifier.send(f"Arrived.\nTotal time: {elapsed} s", force=True)
+        logger.info("S1Client: task %s arrived at goal (%d s)", task_id, elapsed)

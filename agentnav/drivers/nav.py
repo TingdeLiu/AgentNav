@@ -34,7 +34,9 @@ def register(mcp: FastMCP, state, task_mgr, ros_client, meta=None) -> None:
     s1 = None
     if s1_mode == "nav2":
         from agentnav.core.s1_client import S1Client
-        s1 = S1Client(state, task_mgr)
+        from agentnav.bridge_core.telegram_notifier import TelegramNotifier
+        notifier = TelegramNotifier.from_env()
+        s1 = S1Client(state, task_mgr, notifier=notifier)
         s1.start()
     else:
         logger.warning(

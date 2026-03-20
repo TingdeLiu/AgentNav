@@ -375,7 +375,7 @@ Bot: [capture → estimate pixel → pixel_to_pose → s1_move → poll → conf
 - [x] `skills/navigate.md` — full capture → locate → move → confirm workflow
 - [ ] End-to-end hardware validation: "go to black chair" → robot arrives
 - [ ] `pixel_to_pose` TF transform via `/tf_static` (camera tilt / non-planar mount)
-- [ ] Progress streaming to Telegram during navigation
+- [x] Progress streaming to Telegram during navigation (edit-in-place, 8 s throttle)
 - [ ] Closed-loop failure recovery validation
 - [ ] Simulation environment
 
