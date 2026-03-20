@@ -51,8 +51,18 @@ class S1Client:
         self._started = False
 
     def start(self) -> None:
-        """Start background thread: create rclpy node and connect to Nav2."""
+        """Start background thread: create rclpy node and connect to Nav2.
+
+        No-op if S1_MODE != 'nav2' (caller should gate before constructing).
+        """
         if self._started:
+            return
+        if self._state.s1_mode != "nav2":
+            logger.warning(
+                "S1Client.start() called with s1_mode=%r — skipping. "
+                "This client only supports nav2.",
+                self._state.s1_mode,
+            )
             return
         self._started = True
         t = threading.Thread(target=self._spin, name="s1_client_spin", daemon=True)

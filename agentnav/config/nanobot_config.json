@@ -29,7 +29,7 @@
           "S1_CHECKPOINT": "${S1_CHECKPOINT}"
         },
         "_comment_topics": "Topic names default to Wheeltec layout. Override via TOPIC_COLOR_IMAGE / TOPIC_DEPTH_IMAGE / TOPIC_ODOM env vars if needed.",
-        "_comment_intrinsics": "Camera intrinsics are auto-read from /camera/color/camera_info. Override via CAMERA_FX/FY/CX/CY only if needed."
+        "_comment_intrinsics": "Camera intrinsics are auto-read from /camera/color/camera_info. Override via CAMERA_FX/FY/CX/CY only if needed.",
         "toolTimeout": 600
       }
     }

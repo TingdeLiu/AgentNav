@@ -25,12 +25,23 @@ DRIVER_META = {
 def register(mcp: FastMCP, state, task_mgr, ros_client, meta=None) -> None:
     from agentnav.bridge_core.driver_meta import meta_suffix
     from agentnav.bridge_core.robot_state import NavState
-    from agentnav.core.s1_client import S1Client
 
     _sfx = meta_suffix(meta) if meta else ""
+    s1_mode = state.s1_mode
 
-    s1 = S1Client(state, task_mgr)
-    s1.start()
+    # Only Nav2 is implemented. For other modes s1 stays None and s1_move
+    # returns a descriptive error so the agent knows what to fix.
+    s1 = None
+    if s1_mode == "nav2":
+        from agentnav.core.s1_client import S1Client
+        s1 = S1Client(state, task_mgr)
+        s1.start()
+    else:
+        logger.warning(
+            "nav driver: S1_MODE=%r is not yet implemented — "
+            "s1_move will return an error. Set S1_MODE=nav2 to use Nav2.",
+            s1_mode,
+        )
 
     # ── s1_move ───────────────────────────────────────────────────────────────
 
@@ -61,6 +72,15 @@ def register(mcp: FastMCP, state, task_mgr, ros_client, meta=None) -> None:
         """
         if not isinstance(pose, dict) or "x" not in pose:
             return {"error": 'pose must be {"x": float, "y": float, "theta": float}'}
+
+        if s1 is None:
+            return {
+                "error": (
+                    f"S1_MODE={s1_mode!r} is not yet implemented. "
+                    "Only S1_MODE=nav2 is currently supported. "
+                    "Set S1_MODE=nav2 and restart the bridge."
+                )
+            }
 
         if not s1.is_ready:
             return {
