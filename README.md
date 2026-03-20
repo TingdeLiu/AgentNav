@@ -46,30 +46,34 @@ AgentNav flips this. Navigation becomes a conversation between the agent and the
 
 ## Architecture
 
-```
-┌──────────────────────────────────────────────┐
-│  AI Agent (LLM — Claude / Gemini / GPT)       │
-│  Native multimodal vision · Telegram / CLI    │
-├──────────────────────────────────────────────┤
-│  MCP Tool Layer (agentnav drivers)            │
-│  capture · scan · pixel_to_pose              │
-│  s1_move · stop · status                     │
-│  task_status · task_cancel                   │
-│  ros_list_nodes/topics/echo/pub/call         │
-├──────────────────────────────────────────────┤
-│  Navigation Middleware (bridge_core)          │
-│  RobotState · TaskManager (retry/backoff)    │
-│  S1Client · TelegramNotifier                 │
-├──────────────────────────────────────────────┤
-│  ROS2 Client (core/ros_client.py)             │
-│  /camera/color/image_raw  → push_frame()     │
-│  /camera/depth/image_raw  → push_depth()     │
-│  /camera/color/camera_info → intrinsics      │
-│  /odom  ·  /PowerVoltage  ·  /cmd_vel        │
-├──────────────────────────────────────────────┤
-│  Hardware: ROS2 Humble / Wheeltec robot       │
-│  RGB-D Camera · Nav2 · /cmd_vel · /odom      │
-└──────────────────────────────────────────────┘
+```mermaid
+flowchart TD
+    User(["User\nTelegram · CLI"])
+
+    subgraph nanobot["nanobot — Agent OS · Python 3.11"]
+        LLM["AI Agent\nClaude · Gemini · GPT\nnative multimodal vision\nskills: navigate · locate · explore"]
+    end
+
+    subgraph bridge["agentnav — MCP Bridge · Python 3.10"]
+        Tools["MCP Tool Layer  (hot-reloadable drivers)\nrobot_capture · robot_scan · pixel_to_pose\ns1_move · task_status · task_cancel · robot_stop · robot_status\nros_list_nodes · ros_list_topics · ros_topic_echo · ros_topic_pub · ros_service_call"]
+
+        Middleware["bridge_core\nRobotState  ·  TaskManager (retry / backoff)  ·  TelegramNotifier"]
+
+        Clients["core/\nRosClient (RGB-D · odom · power · pixel_to_pose)  ·  S1Client (Nav2 action)"]
+    end
+
+    subgraph hw["ROS2 Humble · Wheeltec Robot"]
+        ROS["/camera/color · /camera/depth · /camera/color/camera_info\n/odom · /PowerVoltage · /cmd_vel"]
+        Nav2["Nav2 — NavigateToPose action server"]
+    end
+
+    User          <-->|"chat"                  | LLM
+    LLM           <-->|"MCP over stdio"        | Tools
+    Tools          -->                           Middleware
+    Middleware     -->                           Clients
+    Clients       <-->|"ROS2 topics"           | ROS
+    Clients       <-->|"action client"         | Nav2
+    Middleware    -.->|"Bot API — nav progress"| User
 ```
 
 **Key design principle**: The agent is the brain. Tools are single-purpose and contain no chained logic. Complex behaviours (scan → locate → move, explore, recover) are taught to the agent via **skills** — markdown files the agent reads, not hardcoded pipelines.
