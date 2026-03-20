@@ -53,11 +53,13 @@ AgentNav flips this. Navigation becomes a conversation between the agent and the
 ├──────────────────────────────────────────────┤
 │  MCP Tool Layer (agentnav drivers)            │
 │  capture · scan · pixel_to_pose              │
-│  s1_move · stop · status · task_status       │
+│  s1_move · stop · status                     │
+│  task_status · task_cancel                   │
 │  ros_list_nodes/topics/echo/pub/call         │
 ├──────────────────────────────────────────────┤
 │  Navigation Middleware (bridge_core)          │
 │  RobotState · TaskManager (retry/backoff)    │
+│  S1Client (Nav2 NavigateToPose action client)│
 ├──────────────────────────────────────────────┤
 │  ROS2 Client (core/ros_client.py)             │
 │  /camera/color/image_raw  → push_frame()     │
@@ -87,12 +89,12 @@ AgentNav flips this. Navigation becomes a conversation between the agent and the
 
 | Tool | Description |
 |------|-------------|
-| `pixel_to_pose(u, v)` | Convert pixel coordinates from a captured frame to a robot-frame pose `{x, y, theta}`. Requires depth camera. |
-| `s1_move(pose)` | Send the robot to `{x, y, theta}` via Nav2 `NavigateToPose`. Returns `task_id` immediately — non-blocking. |
-| `robot_stop()` | Emergency stop. Sets stop flag polled at < 50ms. Cancels all running tasks. |
+| `pixel_to_pose(u, v)` | Convert pixel coordinates from a captured frame to a robot base_link-frame pose `{x, y, theta}`. Requires depth camera. |
+| `s1_move(pose)` | Send the robot to `{x, y, theta}` via Nav2 `NavigateToPose`. Returns `task_id` immediately — non-blocking. Converts base_link pose to map frame internally. |
+| `robot_stop()` | Emergency stop. Sets stop flag polled at < 50 ms. Cancels all running tasks. |
 | `robot_status()` | Current pose, velocity, battery %, nav state. |
 | `task_status(task_id)` | Poll navigation progress. Returns phase (`planning→moving→arrived/failed`), distance to goal, elapsed time. |
-| `task_cancel(task_id)` | Cancel task and stop robot. |
+| `task_cancel(task_id)` | Cancel a specific task and stop robot. Prefer `robot_stop()` for emergencies. |
 
 ### ROS2 Introspection Tools
 
@@ -264,13 +266,15 @@ AgentNav/
     │   ├── status.py        ← robot_status (safety:safe)
     │   ├── look.py          ← robot_capture, robot_scan → ImageContent
     │   ├── perception.py    ← pixel_to_pose
+    │   ├── nav.py           ← s1_move, task_status, task_cancel (Phase 3)
     │   └── ros_introspect.py← 7× ros_* discovery tools
     ├── core/
     │   ├── ros_client.py    ← ROS2 subscriptions: camera + odom + power
-    │   └── s1_client.py     ← Nav2 NavigateToPose action client (Phase 3)
+    │   └── s1_client.py     ← Nav2 NavigateToPose action client
     ├── skills/
     │   ├── ros_introspect.md      ← discover any robot's nodes/topics/services
     │   ├── locate.md              ← capture → estimate (u,v) → pixel_to_pose
+    │   ├── navigate.md            ← full workflow: locate → s1_move → confirm
     │   ├── explore.md             ← scan → locate → move loop
     │   └── ros_package_install.md ← clone/apt → rosdep → colcon → learn
     └── config/
@@ -302,6 +306,8 @@ export S1_CHECKPOINT=                        # only for navdp mode
 # export TOPIC_COLOR_IMAGE=/camera/color/image_raw
 # export TOPIC_DEPTH_IMAGE=/camera/depth/image_raw
 # export TOPIC_ODOM=/odom
+# Camera mounting offset — forward distance from base_link to camera (metres):
+# export CAMERA_X_OFFSET=0.1
 ```
 
 ### 3. Launch
@@ -362,11 +368,13 @@ Bot: [capture → estimate pixel → pixel_to_pose → s1_move → poll → conf
 - [x] `ros_client.py` — live ROS2 subscriptions (camera + odom + power)
 - [x] `skills/locate.md` — agent-native locate workflow
 - [x] `skills/ros_package_install.md` — self-install any ROS2 package
-- [ ] End-to-end validation: `robot_capture` → agent describes scene (Phase 2)
-- [ ] `s1_client.py` — Nav2 NavigateToPose action client (Phase 3)
-- [ ] `s1_move` + `task_status` full pipeline (Phase 3)
-- [ ] End-to-end: "go to black chair" → robot arrives (Phase 3)
-- [ ] `pixel_to_pose` TF transform: camera_link → base_link (Phase 3)
+- [x] End-to-end validation: `robot_capture` → agent describes scene (Phase 2)
+- [x] `s1_client.py` — Nav2 NavigateToPose action client (Phase 3)
+- [x] `s1_move` + `task_status` + `task_cancel` full pipeline (Phase 3)
+- [x] `pixel_to_pose` base_link → map frame conversion via odometry (Phase 3)
+- [x] `skills/navigate.md` — full capture → locate → move → confirm workflow
+- [ ] End-to-end hardware validation: "go to black chair" → robot arrives
+- [ ] `pixel_to_pose` TF transform via `/tf_static` (camera tilt / non-planar mount)
 - [ ] Progress streaming to Telegram during navigation
 - [ ] Closed-loop failure recovery validation
 - [ ] Simulation environment

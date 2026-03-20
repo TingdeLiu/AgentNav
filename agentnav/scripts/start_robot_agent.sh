@@ -19,7 +19,7 @@
 #                         e.g. /opt/conda/envs/navdp/bin/python
 #
 # Optional env vars (have defaults):
-#   S1_MODE                 — navdp | nav2  (default: navdp)
+#   S1_MODE                 — nav2 | navdp  (default: nav2)
 #   S1_CHECKPOINT           — path to NavDP checkpoint file
 #   CAMERA_FX/FY/CX/CY     — camera intrinsics (default: 525/525/320/240)
 
@@ -88,6 +88,6 @@ PYEOF
 # ── 4. Start nanobot gateway ───────────────────────────────────────────────────
 echo "[setup] Starting nanobot gateway..."
 echo "        Telegram: send a message to your bot to start chatting."
-echo "        Available tools: robot_stop, robot_status, robot_capture, robot_scan, pixel_to_pose"
+echo "        Available tools: robot_stop, robot_status, robot_capture, robot_scan, pixel_to_pose, s1_move, task_status, task_cancel"
 echo ""
 exec nanobot gateway --config "$NANOBOT_CONFIG"

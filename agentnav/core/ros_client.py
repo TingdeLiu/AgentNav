@@ -41,6 +41,11 @@ TOPIC_ODOM        = os.environ.get("TOPIC_ODOM",        "/odom")
 TOPIC_CMD_VEL     = os.environ.get("TOPIC_CMD_VEL",     "/cmd_vel")
 TOPIC_POWER       = os.environ.get("TOPIC_POWER",       "/PowerVoltage")
 
+# ── Camera mounting offset (base_link frame) ──────────────────────────────────
+# Forward distance from base_link origin to camera optical centre (metres).
+# Set CAMERA_X_OFFSET if your camera is not directly above base_link.
+CAMERA_X_OFFSET = float(os.environ.get("CAMERA_X_OFFSET", "0.0"))
+
 # ── Battery voltage → percentage conversion ───────────────────────────────────
 BATTERY_V_MIN = float(os.environ.get("BATTERY_V_MIN", "9.5"))   # 0 %
 BATTERY_V_MAX = float(os.environ.get("BATTERY_V_MAX", "12.6"))  # 100 %
@@ -281,9 +286,18 @@ class RosClient:
 
     def pixel_to_pose(self, u: int, v: int) -> dict:
         """
-        Convert pixel (u, v) to robot-frame pose {x, y, theta}.
-        Requires depth frame and camera intrinsics.
-        TF camera_link → base_link: TODO Phase 3.
+        Convert pixel (u, v) to robot base_link-frame pose {x, y, theta}.
+
+        Camera optical frame → base_link frame mapping:
+          x = z_cam + CAMERA_X_OFFSET   (depth is forward; add mounting offset)
+          y = -x_cam                    (rightward in camera = leftward in base_link)
+          theta = atan2(y, x)           (heading toward the target)
+
+        For full TF support (non-horizontal camera, tilted mount), set
+        CAMERA_X_OFFSET env var. Full /tf_static integration is a future item.
+
+        Raises RuntimeError if depth is unavailable, intrinsics are not ready,
+        or the depth value at (u, v) is out of valid range (0.05–10 m).
         """
         _, depth = self._state.pop_frame()
         if depth is None:
@@ -298,7 +312,21 @@ class RosClient:
             )
 
         d = float(depth[v, u]) / 1000.0          # mm → m
-        x_cam = (u - self._cx) * d / self._fx
-        z_cam = d
-        # TODO Phase 3: TF transform camera_link → base_link
-        return {"x": round(z_cam, 3), "y": round(-x_cam, 3), "theta": 0.0}
+
+        if d < 0.05 or d > 10.0:
+            raise RuntimeError(
+                f"Depth at pixel ({u}, {v}) is {d:.3f} m — out of valid range "
+                "(0.05–10 m). The pixel may be on a reflective surface, too close, "
+                "or missing depth data. Try a different pixel."
+            )
+
+        # Camera optical frame: z forward, x right, y down
+        x_cam = (u - self._cx) * d / self._fx    # lateral (right positive)
+        z_cam = d                                  # forward (depth)
+
+        # base_link frame: x forward, y left
+        x_base = z_cam + CAMERA_X_OFFSET
+        y_base = -x_cam
+
+        theta = math.atan2(y_base, x_base)
+        return {"x": round(x_base, 3), "y": round(y_base, 3), "theta": round(theta, 4)}
