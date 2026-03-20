@@ -110,29 +110,6 @@ class S1Client:
         finally:
             node.destroy_node()
 
-    # ── Coordinate conversion ─────────────────────────────────────────────────
-
-    def _base_to_map(self, pose: dict) -> tuple[float, float, float]:
-        """
-        Convert a robot-frame (base_link) relative offset to an absolute
-        map-frame pose using the current odometry.
-
-        Args:
-            pose: {"x": forward metres, "y": left metres, "theta": radians}
-
-        Returns:
-            (map_x, map_y, map_theta) — absolute pose for Nav2 goal
-        """
-        cur = self._state.pose
-        cx, cy, ctheta = cur["x"], cur["y"], cur["theta"]
-        dx, dy = float(pose["x"]), float(pose.get("y", 0.0))
-        dtheta = float(pose.get("theta", 0.0))
-
-        map_x = cx + math.cos(ctheta) * dx - math.sin(ctheta) * dy
-        map_y = cy + math.sin(ctheta) * dx + math.cos(ctheta) * dy
-        map_theta = ctheta + dtheta
-        return map_x, map_y, map_theta
-
     # ── Navigation coroutine ──────────────────────────────────────────────────
 
     async def navigate_to(self, pose: dict, task_id_ref: list) -> None:
@@ -141,7 +118,8 @@ class S1Client:
 
         Args:
             pose:        {"x", "y", "theta"} in robot base_link frame (metres / rad).
-                         Converted to map frame internally using current odometry.
+                         Sent as-is to Nav2 with frame_id="base_link" — Nav2 resolves
+                         the transform via TF (AMCL-corrected map→base_link).
             task_id_ref: Single-element list; [task_id] is populated by s1_move
                          after task_mgr.start() returns — guaranteed before the
                          event loop runs this coroutine.
@@ -158,21 +136,24 @@ class S1Client:
 
         task_id: Optional[str] = task_id_ref[0]
 
-        map_x, map_y, map_theta = self._base_to_map(pose)
+        x = float(pose["x"])
+        y = float(pose.get("y", 0.0))
+        theta = float(pose.get("theta", 0.0))
         logger.info(
-            "S1Client: navigate_to map=(%.3f, %.3f, %.3f) [base=(%.3f, %.3f, %.3f)]",
-            map_x, map_y, map_theta,
-            pose["x"], pose.get("y", 0.0), pose.get("theta", 0.0),
+            "S1Client: navigate_to base_link=(%.3f, %.3f, %.3f)",
+            x, y, theta,
         )
 
         from nav2_msgs.action import NavigateToPose
 
         goal = NavigateToPose.Goal()
-        goal.pose.header.frame_id = "map"
-        goal.pose.pose.position.x = map_x
-        goal.pose.pose.position.y = map_y
-        goal.pose.pose.orientation.z = math.sin(map_theta / 2)
-        goal.pose.pose.orientation.w = math.cos(map_theta / 2)
+        # Send in base_link frame — Nav2 transforms to map via TF (AMCL-corrected).
+        # This is more accurate than manually converting with drifting /odom.
+        goal.pose.header.frame_id = "base_link"
+        goal.pose.pose.position.x = x
+        goal.pose.pose.position.y = y
+        goal.pose.pose.orientation.z = math.sin(theta / 2)
+        goal.pose.pose.orientation.w = math.cos(theta / 2)
 
         # ── Threading bridge: rclpy callbacks → asyncio polling ───────────────
         goal_event = threading.Event()    # set when goal is accepted/rejected
