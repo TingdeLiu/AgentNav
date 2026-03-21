@@ -13,11 +13,26 @@ from __future__ import annotations
 import asyncio
 import base64
 import logging
+import os
+from datetime import datetime
+from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
 from mcp.types import ImageContent, TextContent
 
 logger = logging.getLogger(__name__)
+
+_CAPTURE_LOG_DIR = os.environ.get("CAPTURE_LOG_DIR", str(Path.home() / ".agentnav" / "captures"))
+
+
+def _save_frame(frame: bytes) -> None:
+    try:
+        log_dir = Path(_CAPTURE_LOG_DIR)
+        log_dir.mkdir(parents=True, exist_ok=True)
+        filename = datetime.now().strftime("%Y-%m-%d_%H-%M-%S-%f")[:-3] + ".jpg"
+        (log_dir / filename).write_bytes(frame)
+    except Exception as e:
+        logger.warning("capture log write failed: %s", e)
 
 DRIVER_META = {
     "triggers": ["look", "see", "capture", "scan", "what do you see", "describe", "find"],
@@ -51,6 +66,7 @@ def register(mcp: FastMCP, state, task_mgr, ros_client, meta=None) -> None:
             frame, _ = state.pop_frame()
             if frame is None:
                 return "No camera frame available. Check that /camera/image_raw is publishing."
+            _save_frame(frame)
             return ImageContent(
                 type="image",
                 data=base64.b64encode(frame).decode(),

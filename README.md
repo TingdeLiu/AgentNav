@@ -313,6 +313,8 @@ export S1_CHECKPOINT=                        # only for navdp mode
 # export TOPIC_ODOM=/odom
 # Camera mounting offset — forward distance from base_link to camera (metres):
 # export CAMERA_X_OFFSET=0.1
+# Captured frames are saved here for post-hoc debugging (default shown; set to "" to disable):
+# export CAPTURE_LOG_DIR=~/.agentnav/captures
 ```
 
 ### 3. Launch
