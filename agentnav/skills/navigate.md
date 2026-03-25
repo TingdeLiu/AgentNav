@@ -83,6 +83,27 @@ task_cancel(task_id)
 
 ---
 
+## Distant targets (x > 4 m)
+
+If `pixel_to_pose` returns `x > 4.0 m`, do **not** navigate directly — depth accuracy
+degrades at long range and Nav2 may reject goals that project outside the current map.
+Use a midpoint approach instead:
+
+```
+pixel_to_pose(u, v) → {x: 7.2, y: 0.4, theta: 0.1}   ← too far
+
+# Navigate to half the distance
+s1_move({x: 3.5, y: 0.2, theta: 0.1}) → task_id → [arrived]
+
+# Re-assess from the new position
+robot_capture()
+pixel_to_pose(u2, v2) → {x: 3.1, y: 0.1, theta: 0.05}   ← now within range
+s1_move({x: 3.1, ...}) → task_id → [arrived]
+robot_capture() → [confirm]
+```
+
+---
+
 ## Key rules
 
 1. Always call `robot_capture()` **before** to understand the scene.
@@ -91,3 +112,4 @@ task_cancel(task_id)
 4. Stop polling when `status` is `completed`, `failed`, or `cancelled`.
 5. If `pixel_to_pose` returns an error, pick a different pixel — do not retry the same one.
 6. If navigation fails twice, use `robot_scan()` to reorient and try from a fresh perspective.
+7. If `pixel_to_pose` returns `x > 4.0 m`, use the midpoint strategy above.

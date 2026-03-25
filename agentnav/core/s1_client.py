@@ -16,9 +16,14 @@ from __future__ import annotations
 import asyncio
 import logging
 import math
+import os
 import threading
 import time
 from typing import TYPE_CHECKING, Optional
+
+# Maximum time (seconds) to wait for a navigation goal to complete.
+# Override with NAV_TIMEOUT_S env var (e.g. export NAV_TIMEOUT_S=60).
+_NAV_TIMEOUT_S = float(os.environ.get("NAV_TIMEOUT_S", "120"))
 
 if TYPE_CHECKING:
     from agentnav.bridge_core.robot_state import RobotState
@@ -245,6 +250,18 @@ class S1Client:
                 if notifier:
                     notifier.send("Navigation cancelled.", force=True)
                 raise asyncio.CancelledError("robot_stop() called during navigation")
+            if time.monotonic() - t_start > _NAV_TIMEOUT_S:
+                gh = goal_handle_ref[0]
+                if gh is not None:
+                    gh.cancel_goal_async()
+                msg = (
+                    f"Navigation timed out after {_NAV_TIMEOUT_S:.0f} s. "
+                    "The goal may be unreachable or Nav2 may be stuck. "
+                    "Call robot_capture() to reassess the scene."
+                )
+                if notifier:
+                    notifier.send(f"Navigation timed out.\n{msg}", force=True)
+                raise RuntimeError(msg)
             await asyncio.sleep(0.5)
 
         if error_ref[0]:

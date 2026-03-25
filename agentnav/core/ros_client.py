@@ -65,6 +65,26 @@ def _angle_diff(target: float, current: float) -> float:
     return d
 
 
+def _sample_depth_mm(depth, u: int, v: int, radius: int = 2) -> float:
+    """
+    Return depth at pixel (u, v) in millimetres using median of a neighbourhood.
+
+    Samples a (2*radius+1)² patch centred on (u, v), keeps only pixels in
+    [50 mm, 10 000 mm] (5 cm–10 m), and returns their median.  Falls back to
+    the raw single-pixel value if every neighbour is invalid, letting the
+    caller's range check handle the error.
+    """
+    import numpy as np
+    h, w = depth.shape
+    u0, u1 = max(0, u - radius), min(w, u + radius + 1)
+    v0, v1 = max(0, v - radius), min(h, v + radius + 1)
+    patch = depth[v0:v1, u0:u1].astype(np.float32)
+    valid = patch[(patch >= 50) & (patch <= 10_000)]
+    if valid.size == 0:
+        return float(depth[v, u])
+    return float(np.median(valid))
+
+
 def _encode_jpeg(bgr_array) -> bytes:
     """Encode a BGR numpy uint8 array to JPEG bytes. Tries cv2, falls back to PIL."""
     try:
@@ -299,11 +319,13 @@ class RosClient:
         Raises RuntimeError if depth is unavailable, intrinsics are not ready,
         or the depth value at (u, v) is out of valid range (0.05–10 m).
         """
-        _, depth = self._state.pop_frame()
+        # Use the depth snapshot saved at robot_capture() time, not the current
+        # latest_depth — the agent may have analysed an image from several frames ago.
+        depth = self._state.captured_depth
         if depth is None:
             raise RuntimeError(
-                f"No depth frame. Ensure {TOPIC_DEPTH_IMAGE} is publishing "
-                "and ros_client.start() has been called."
+                "No captured depth frame. Call robot_capture() before pixel_to_pose() "
+                f"to ensure depth is available (topic: {TOPIC_DEPTH_IMAGE})."
             )
         if not self._intrinsics_ready:
             raise RuntimeError(
@@ -311,7 +333,7 @@ class RosClient:
                 "or set CAMERA_FX/FY/CX/CY env vars."
             )
 
-        d = float(depth[v, u]) / 1000.0          # mm → m
+        d = _sample_depth_mm(depth, u, v) / 1000.0   # neighbourhood median, mm → m
 
         if d < 0.05 or d > 10.0:
             raise RuntimeError(

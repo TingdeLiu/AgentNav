@@ -37,7 +37,13 @@ class RobotState:
     # ── Latest camera frame + depth (pushed by ros_client) ──────────────────
     latest_frame: Optional[bytes] = None
     latest_depth: Optional[object] = None  # numpy array
+    frame_seq: int = 0                      # incremented on every push_frame
     _frame_lock: threading.Lock = field(default_factory=threading.Lock)
+
+    # ── Depth snapshot captured atomically with the last robot_capture() ─────
+    # pixel_to_pose() uses this instead of re-reading latest_depth, ensuring
+    # the depth matches the exact frame the agent analysed.
+    captured_depth: Optional[object] = None  # numpy array, mm uint16
 
     # ── Emergency stop flag (written by robot_stop, polled by ros_client) ───
     _stop_flag: bool = False
@@ -71,6 +77,7 @@ class RobotState:
         """Update latest RGB frame. Called from ros_client color callback."""
         with self._frame_lock:
             self.latest_frame = frame
+            self.frame_seq += 1
 
     def push_depth(self, depth) -> None:
         """Update latest depth array (uint16 mm). Called from ros_client depth callback."""

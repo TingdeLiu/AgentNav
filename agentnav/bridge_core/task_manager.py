@@ -27,6 +27,9 @@ from typing import Dict, Optional
 
 logger = logging.getLogger(__name__)
 
+# Maximum number of completed/failed/cancelled tasks to retain in memory.
+_MAX_TASK_HISTORY = 200
+
 
 @dataclass
 class TaskInfo:
@@ -94,10 +97,12 @@ class TaskManager:
                     await coro
                     info.status = "completed"
                     info.phase = "arrived"
+                    self._evict_old_tasks()
                     return
                 except asyncio.CancelledError:
                     info.status = "cancelled"
                     info.phase = "failed"
+                    self._evict_old_tasks()
                     raise
                 except Exception as exc:
                     attempt += 1
@@ -107,6 +112,7 @@ class TaskManager:
                         info.status = "failed"
                         info.phase = "failed"
                         info.error = str(exc)
+                        self._evict_old_tasks()
                         return
                     # Compute backoff delay
                     if self._backoff == "exponential":
@@ -123,7 +129,7 @@ class TaskManager:
                     )
                     await asyncio.sleep(delay)
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         asyncio_task = loop.create_task(_run())
         info._asyncio_task = asyncio_task
         return task_id
@@ -157,6 +163,18 @@ class TaskManager:
         if cancelled:
             info.status = "cancelled"
         return cancelled
+
+    def _evict_old_tasks(self) -> None:
+        """Remove oldest finished tasks when history exceeds _MAX_TASK_HISTORY."""
+        done = [
+            tid for tid, info in self._tasks.items()
+            if info.status in ("completed", "failed", "cancelled")
+        ]
+        if len(done) <= _MAX_TASK_HISTORY:
+            return
+        oldest = sorted(done, key=lambda tid: self._tasks[tid].start_time)
+        for tid in oldest[: len(done) - _MAX_TASK_HISTORY]:
+            del self._tasks[tid]
 
     def update(self, task_id: str, **kwargs) -> None:
         """

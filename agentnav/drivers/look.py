@@ -14,6 +14,7 @@ import asyncio
 import base64
 import logging
 import os
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -22,7 +23,18 @@ from mcp.types import ImageContent, TextContent
 
 logger = logging.getLogger(__name__)
 
-_CAPTURE_LOG_DIR = os.environ.get("CAPTURE_LOG_DIR", str(Path.home() / ".agentnav" / "captures"))
+_CAPTURE_LOG_DIR  = os.environ.get("CAPTURE_LOG_DIR",  str(Path.home() / ".agentnav" / "captures"))
+_CAPTURE_MAX_FILES = int(os.environ.get("CAPTURE_MAX_FILES", "500"))
+
+
+def _evict_old_captures(log_dir: Path) -> None:
+    """Delete oldest .jpg files when the directory exceeds _CAPTURE_MAX_FILES."""
+    files = sorted(log_dir.glob("*.jpg"), key=lambda p: p.stat().st_mtime)
+    for old in files[: max(0, len(files) - _CAPTURE_MAX_FILES)]:
+        try:
+            old.unlink()
+        except OSError:
+            pass
 
 
 def _save_frame(frame: bytes) -> None:
@@ -31,6 +43,7 @@ def _save_frame(frame: bytes) -> None:
         log_dir.mkdir(parents=True, exist_ok=True)
         filename = datetime.now().strftime("%Y-%m-%d_%H-%M-%S-%f")[:-3] + ".jpg"
         (log_dir / filename).write_bytes(frame)
+        _evict_old_captures(log_dir)
     except Exception as e:
         logger.warning("capture log write failed: %s", e)
 
@@ -59,13 +72,16 @@ def register(mcp: FastMCP, state, task_mgr, ros_client, meta=None) -> None:
         - Estimate pixel coordinates of a target (then call pixel_to_pose)
         - Confirm arrival after a navigation task completes
 
-        Returns the latest frame from /camera/image_raw as a JPEG image.
+        Returns the latest frame from the configured color camera topic as a JPEG image.
         """
         state.set_nav_state(NavState.LOOKING)
         try:
-            frame, _ = state.pop_frame()
+            frame, depth = state.pop_frame()
             if frame is None:
                 return "No camera frame available. Check that /camera/image_raw is publishing."
+            # Save depth snapshot so pixel_to_pose() uses the depth that matches
+            # this exact frame, not whatever arrives later.
+            state.captured_depth = depth
             _save_frame(frame)
             return ImageContent(
                 type="image",
@@ -74,6 +90,19 @@ def register(mcp: FastMCP, state, task_mgr, ros_client, meta=None) -> None:
             )
         finally:
             state.set_nav_state(NavState.IDLE)
+
+    async def _wait_fresh_frame(seq_before: int, timeout_s: float = 2.0) -> None:
+        """Block until a new RGB frame arrives after rotation (frame_seq changes)."""
+        t0 = time.monotonic()
+        while True:
+            with state._frame_lock:
+                current_seq = state.frame_seq
+            if current_seq != seq_before:
+                return
+            if time.monotonic() - t0 > timeout_s:
+                logger.warning("Timed out waiting for fresh frame after rotation")
+                return
+            await asyncio.sleep(0.05)
 
     async def robot_scan(angles: list[int] | None = None) -> list:
         """
@@ -90,7 +119,12 @@ def register(mcp: FastMCP, state, task_mgr, ros_client, meta=None) -> None:
         results: list = []
         for angle in angles:
             results.append(TextContent(type="text", text=f"--- {angle}° ---"))
+            with state._frame_lock:
+                seq_before = state.frame_seq
             await asyncio.to_thread(ros_client.rotate_to, angle)
+            # Wait for a frame that arrived AFTER rotation completed — the buffer
+            # may still hold a frame captured mid-rotation.
+            await _wait_fresh_frame(seq_before)
             results.append(robot_capture())
         return results
 
