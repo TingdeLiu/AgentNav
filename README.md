@@ -315,6 +315,10 @@ export S1_CHECKPOINT=                        # only for navdp mode
 # export CAMERA_X_OFFSET=0.1
 # Captured frames are saved here for post-hoc debugging (default shown; set to "" to disable):
 # export CAPTURE_LOG_DIR=~/.agentnav/captures
+# Maximum number of captured frames to keep on disk before oldest are evicted:
+# export CAPTURE_MAX_FILES=500
+# Navigation goal timeout in seconds — raise RuntimeError if Nav2 does not finish in time:
+# export NAV_TIMEOUT_S=120
 ```
 
 ### 3. Launch
