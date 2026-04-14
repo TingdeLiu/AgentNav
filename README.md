@@ -1,6 +1,10 @@
 ﻿# 🤖 AgentNav: Agentic Robot Navigation Framework
 
 <p align="center">
+  <strong>English</strong> | <a href="README_CN.md">中文</a>
+</p>
+
+<p align="center">
   <img src="https://img.shields.io/badge/status-active_development-green" alt="status">
   <img src="https://img.shields.io/badge/license-MIT-yellow" alt="license">
   <img src="https://img.shields.io/badge/Python-3.10+-blue" alt="Python">
