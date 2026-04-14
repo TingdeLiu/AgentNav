@@ -25,7 +25,9 @@
       "WebFetch(domain:clawhub.ai)",
       "Bash(git -C \"C:/GitHub/AgentNav\" log --oneline)",
       "Bash(git rm:*)",
-      "Bash(git pull:*)"
+      "Bash(git pull:*)",
+      "Bash(wc:*)",
+      "Bash(grep:*)"
     ]
   }
 }

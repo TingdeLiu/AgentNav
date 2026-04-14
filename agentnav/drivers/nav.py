@@ -25,25 +25,14 @@ DRIVER_META = {
 def register(mcp: FastMCP, state, task_mgr, ros_client, meta=None) -> None:
     from agentnav.bridge_core.driver_meta import meta_suffix
     from agentnav.bridge_core.robot_state import NavState
+    from agentnav.bridge_core import server as _server
 
     _sfx = meta_suffix(meta) if meta else ""
     s1_mode = state.s1_mode
 
-    # Only Nav2 is implemented. For other modes s1 stays None and s1_move
-    # returns a descriptive error so the agent knows what to fix.
-    s1 = None
-    if s1_mode == "nav2":
-        from agentnav.core.s1_client import S1Client
-        from agentnav.bridge_core.telegram_notifier import TelegramNotifier
-        notifier = TelegramNotifier.from_env()
-        s1 = S1Client(state, task_mgr, notifier=notifier)
-        s1.start()
-    else:
-        logger.warning(
-            "nav driver: S1_MODE=%r is not yet implemented — "
-            "s1_move will return an error. Set S1_MODE=nav2 to use Nav2.",
-            s1_mode,
-        )
+    # S1Client is a long-lived singleton owned by server.py. register() must
+    # stay side-effect-free so hot-reload never spawns a second action client.
+    s1 = _server.services.get("s1_client")
 
     # ── s1_move ───────────────────────────────────────────────────────────────
 

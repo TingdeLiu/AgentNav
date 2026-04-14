@@ -70,9 +70,11 @@ def _sample_depth_mm(depth, u: int, v: int, radius: int = 2) -> float:
     Return depth at pixel (u, v) in millimetres using median of a neighbourhood.
 
     Samples a (2*radius+1)² patch centred on (u, v), keeps only pixels in
-    [50 mm, 10 000 mm] (5 cm–10 m), and returns their median.  Falls back to
-    the raw single-pixel value if every neighbour is invalid, letting the
-    caller's range check handle the error.
+    [50 mm, 10 000 mm] (5 cm–10 m), and returns their median.
+
+    Raises RuntimeError if the entire neighbourhood is invalid, so the agent
+    gets a specific "no valid depth here" signal instead of a misleading
+    "out of range" error from the downstream range check.
     """
     import numpy as np
     h, w = depth.shape
@@ -81,7 +83,12 @@ def _sample_depth_mm(depth, u: int, v: int, radius: int = 2) -> float:
     patch = depth[v0:v1, u0:u1].astype(np.float32)
     valid = patch[(patch >= 50) & (patch <= 10_000)]
     if valid.size == 0:
-        return float(depth[v, u])
+        raise RuntimeError(
+            f"No valid depth within ±{radius} px of pixel ({u}, {v}). "
+            "The region is likely a reflective/transparent surface (glass, mirror, "
+            "polished floor) or beyond the depth sensor's 10 m range. "
+            "Pick a pixel on a solid, matte, closer object — do not retry the same one."
+        )
     return float(np.median(valid))
 
 

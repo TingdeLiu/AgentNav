@@ -12,9 +12,17 @@ Bare coroutine (one attempt only, no retries):
     task_id = task_mgr.start(some_coroutine(), instruction="go to chair")
 
 Retry behaviour:
-    - Only Exception retries; CancelledError is never retried (preserves robot_stop correctness).
+    - Only TransientError is retried. Every other Exception fails immediately
+      so the agent sees the real error and can replan, instead of watching a
+      doomed task cycle through "retrying" for no reason.
+    - CancelledError is never retried (preserves robot_stop correctness).
     - status="retrying" is visible via get_status() during backoff sleep.
     - Jitter adds random delay variation to avoid thundering-herd on external services.
+
+    Raise TransientError from tool code when the failure is actually worth
+    retrying (flaky TF lookup, temporary Nav2 server disconnect, transient
+    IO). Raise plain RuntimeError / ValueError for everything else (invalid
+    pose, goal rejected, depth out of range, programming bugs).
 """
 import asyncio
 import inspect
@@ -29,6 +37,15 @@ logger = logging.getLogger(__name__)
 
 # Maximum number of completed/failed/cancelled tasks to retain in memory.
 _MAX_TASK_HISTORY = 200
+
+
+class TransientError(Exception):
+    """Raise to opt a failure into TaskManager's retry loop.
+
+    Anything that is *not* a TransientError fails the task immediately —
+    retries on deterministic errors (bad pose, rejected goal, missing depth)
+    only mask the real problem from the agent.
+    """
 
 
 @dataclass
@@ -104,7 +121,7 @@ class TaskManager:
                     info.phase = "failed"
                     self._evict_old_tasks()
                     raise
-                except Exception as exc:
+                except TransientError as exc:
                     attempt += 1
                     info.retries = attempt
                     info.last_retry_reason = str(exc)
@@ -114,6 +131,16 @@ class TaskManager:
                         info.error = str(exc)
                         self._evict_old_tasks()
                         return
+                except Exception as exc:
+                    # Deterministic failures (bad pose, goal rejected, depth
+                    # missing, programming bugs) must not be retried — the
+                    # agent needs to see the error and replan.
+                    info.status = "failed"
+                    info.phase = "failed"
+                    info.error = str(exc)
+                    self._evict_old_tasks()
+                    logger.info("Task %s failed (non-transient): %s", task_id, exc)
+                    return
                     # Compute backoff delay
                     if self._backoff == "exponential":
                         delay = self._retry_delay_s * (2 ** (attempt - 1))
